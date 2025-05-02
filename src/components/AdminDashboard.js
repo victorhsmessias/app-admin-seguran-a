@@ -5,6 +5,8 @@ import { getAllSecurityGuards, createSecurityGuard, updateSecurityGuard, deleteS
 import { getRealtimeCheckIns, getCheckInsByDateRange, getCheckInStats } from '../services/checkInService';
 import { useNavigate } from 'react-router-dom';
 import { onAuthStateChanged } from 'firebase/auth';
+import { auth, db } from '../firebase';
+import { getDoc, doc, collection, query } from 'firebase/firestore';
 
 const AdminDashboard = ({ user, onLogout }) => {
   // Estados para controle da interface
@@ -16,6 +18,9 @@ const AdminDashboard = ({ user, onLogout }) => {
   const [activeTab, setActiveTab] = useState('overview');
   const [securityGuards, setSecurityGuards] = useState([]);
   const [checkIns, setCheckIns] = useState([]);
+  const [showPasswordModal, setShowPasswordModal] = useState(false);
+  const [adminPasswordInput, setAdminPasswordInput] = useState('');
+  const [pendingFormData, setPendingFormData] = useState(null);
   const [stats, setStats] = useState({
     totalGuards: 0,
     activeGuards: 0,
@@ -48,55 +53,38 @@ const AdminDashboard = ({ user, onLogout }) => {
   const guardsListenerRef = useRef(null);
   const checkInsListenerRef = useRef(null);
 
+  // Adicione após as definições de estado e useRef
+  const checkAdminStatus = async () => {
+    if (!auth.currentUser) {
+      console.error("Usuário não autenticado");
+      return false;
+    }
+    
+    try {
+      const adminDoc = await getDoc(doc(db, 'users', auth.currentUser.uid));
+      return adminDoc.exists() && adminDoc.data().role === 'admin';
+    } catch (error) {
+      console.error("Erro ao verificar status de admin:", error);
+      return false;
+    }
+  };
+
   const handleLogoutClick = async () => {
     navigate('/login');
     await onLogout();
   };
 
   // Carregar dados ao montar o componente
-useEffect(() => {
-  // Importar auth do Firebase
-  const { auth } = require('../firebase');
-  
-  // Função para carregar dados
-  const loadData = async () => {
-    try {
-      setLoading(true);
-      
-      // Buscar seguranças
-      const guardsResult = await getAllSecurityGuards();
-      setSecurityGuards(guardsResult.data);
-      guardsListenerRef.current = guardsResult.unsubscribe;
-      
-      // Buscar check-ins em tempo real
-      const checkInsResult = await getRealtimeCheckIns(20);
-      setCheckIns(checkInsResult.data);
-      checkInsListenerRef.current = checkInsResult.unsubscribe;
-      
-      // Buscar estatísticas
-      const statsData = await getCheckInStats();
-      setStats({
-        totalGuards: guardsResult.data.length,
-        activeGuards: guardsResult.data.filter(guard => guard.role === 'security').length,
-        checkInsToday: statsData.todayCount
-      });
-      
-      setLoading(false);
-    } catch (error) {
-      console.error('Erro ao carregar dados:', error);
-      setError('Falha ao carregar os dados. Verifique suas conexão e permissões.');
-      setLoading(false);
-    }
-  };
-  
+useEffect(() => {  
+    
   // Verificar se o usuário já está autenticado
   if (auth.currentUser) {
-    loadData();
+    loadDashboardData();
   } else {
     // Configurar um ouvinte para quando a autenticação mudar
     const unsubscribe = onAuthStateChanged(auth, (user) => {
       if (user) {
-        loadData();
+        loadDashboardData();
       } else {
         setLoading(false);
       }
@@ -212,21 +200,25 @@ useEffect(() => {
     });
   };
   
-  // Função para enviar o formulário
   const handleSubmitForm = async (e) => {
     e.preventDefault();
     setIsSubmitting(true);
     setError(null);
     
     try {
+      // Verificação de admin
+      const isAdmin = await checkAdminStatus();
+      if (!isAdmin) {
+        throw new Error("Você não tem permissões de administrador para esta operação");
+      }
+      
       if (modalMode === 'create') {
-        // Validar senha para novos usuários
-        if (!formPassword || formPassword.length < 6) {
-          throw new Error("A senha deve ter pelo menos 6 caracteres");
-        }
-        
-        // Criar novo segurança
-        await createSecurityGuard(formData, formPassword);
+        // Em vez de usar prompt, guardamos os dados do formulário e
+        // exibimos o modal de senha
+        setPendingFormData({...formData});
+        setShowPasswordModal(true);
+        setIsSubmitting(false); // Não está enviando ainda
+        return; // Interrompe a execução até que o modal seja confirmado
       } else {
         // Atualizar segurança existente
         await updateSecurityGuard(formData.id, formData);
@@ -243,6 +235,31 @@ useEffect(() => {
     }
   };
   
+  const handlePasswordConfirm = async () => {
+    setIsSubmitting(true);
+    try {
+      await createSecurityGuard(
+        pendingFormData, 
+        formPassword,
+        auth.currentUser.email,
+        adminPasswordInput
+      );
+      
+      // Limpar dados e fechar modais
+      setAdminPasswordInput('');
+      setShowPasswordModal(false);
+      setShowModal(false);
+      
+      // Recarregar lista
+      await loadDashboardData();
+    } catch (err) {
+      console.error("Erro ao criar funcionário:", err);
+      setError(err.message || "Ocorreu um erro ao criar o funcionário.");
+    } finally {
+      setIsSubmitting(false);
+    }
+  };
+    
   // Função para excluir um segurança
   const handleDeleteGuard = async (id) => {
     if (!window.confirm('Tem certeza que deseja excluir este funcionário?')) {
@@ -250,13 +267,24 @@ useEffect(() => {
     }
     
     try {
+      // Adicione esta verificação de admin
+      const isAdmin = await checkAdminStatus();
+      if (!isAdmin) {
+        throw new Error("Você não tem permissões de administrador para esta operação");
+      }
+      
+      // Força atualização do token antes da operação
+      if (auth.currentUser) {
+        await auth.currentUser.getIdToken(true);
+      }
+      
       await deleteSecurityGuard(id);
       // Atualizar a lista após excluir
       const updatedGuards = securityGuards.filter(guard => guard.id !== id);
       setSecurityGuards(updatedGuards);
     } catch (error) {
       console.error('Erro ao excluir segurança:', error);
-      alert('Ocorreu um erro ao excluir o funcionário.');
+      alert('Ocorreu um erro ao excluir o funcionário: ' + (error.message || 'Erro desconhecido'));
     }
   };
   
@@ -277,8 +305,11 @@ useEffect(() => {
     }
 
     setIsGeneratingReport(true);
+    setReportData([]); // Limpar dados anteriores
 
     try {
+      console.log("Gerando relatório com filtros:", reportFilter);
+      
       // Buscar check-ins pelo intervalo de datas e usuário (se especificado)
       const checkIns = await getCheckInsByDateRange(
         reportFilter.startDate, 
@@ -286,10 +317,12 @@ useEffect(() => {
         reportFilter.securityId || null
       );
       
-      setReportData(checkIns);
+      console.log("Check-ins encontrados:", checkIns.length, checkIns);
       
       if (checkIns.length === 0) {
         alert('Nenhum registro encontrado para os filtros selecionados.');
+      } else {
+        setReportData(checkIns);
       }
     } catch (error) {
       console.error('Erro ao gerar relatório:', error);
@@ -306,20 +339,36 @@ useEffect(() => {
       return;
     }
     
-    // Criar conteúdo CSV
-    const headers = ['ID', 'Usuário', 'Data/Hora', 'Latitude', 'Longitude', 'Precisão', 'Dispositivo'];
+    // Criar cabeçalho CSV mais completo
+    const headers = [
+      'ID', 
+      'Nome do Funcionário', 
+      'Data', 
+      'Hora', 
+      'Latitude', 
+      'Longitude', 
+      'Endereço',
+      'Dispositivo',
+      'URL da Foto'
+    ];
     
     const csvContent = [
       headers.join(','),
-      ...reportData.map(item => [
-        item.id,
-        item.username || 'N/A',
-        formatDateTime(item.timestamp),
-        item.location.latitude,
-        item.location.longitude,
-        item.location.accuracy,
-        item.deviceInfo ? `"${item.deviceInfo.replace(/"/g, '""')}"` : 'N/A'
-      ].join(','))
+      ...reportData.map(item => {
+        const date = new Date(item.timestamp);
+        
+        return [
+          item.id,
+          (item.username || 'N/A').replace(/,/g, ' '), // Evitar quebras por vírgulas
+          date.toLocaleDateString('pt-BR'),
+          date.toLocaleTimeString('pt-BR'),
+          item.location.latitude,
+          item.location.longitude,
+          (item.address || 'Endereço não disponível').replace(/,/g, ' '),
+          item.deviceInfo ? `"${item.deviceInfo.replace(/"/g, '""')}"` : 'N/A',
+          item.photoUrl || 'N/A'
+        ].join(',');
+      })
     ].join('\n');
     
     // Criar blob e link de download
@@ -327,7 +376,13 @@ useEffect(() => {
     const url = URL.createObjectURL(blob);
     const link = document.createElement('a');
     link.setAttribute('href', url);
-    link.setAttribute('download', `relatorio_${reportFilter.startDate}_${reportFilter.endDate}.csv`);
+    
+    // Nome do arquivo mais informativo
+    const fileName = reportFilter.securityId 
+      ? `relatorio_${securityGuards.find(g => g.id === reportFilter.securityId)?.username || 'funcionario'}_${reportFilter.startDate}_a_${reportFilter.endDate}.csv`
+      : `relatorio_todos_${reportFilter.startDate}_a_${reportFilter.endDate}.csv`;
+    
+    link.setAttribute('download', fileName);
     link.style.visibility = 'hidden';
     document.body.appendChild(link);
     link.click();
@@ -605,7 +660,7 @@ useEffect(() => {
                 onChange={handleReportFilterChange}
                 className="shadow-sm focus:ring-blue-500 focus:border-blue-500 block w-full sm:text-sm border-gray-300 rounded-md p-2 border"
               >
-                <option value="">Escolher funcionário</option>
+                <option value="">Todos os funcionários</option>
                 {securityGuards
                   .filter(guard => guard.role === 'security')
                   .map(guard => (
@@ -648,7 +703,7 @@ useEffect(() => {
             )}
           </div>
 
-          {reportData.length > 0 && (
+          {reportData.length > 0 ? (
             <div className="mt-8 border-t border-gray-200 pt-6">
               <div className="flex justify-between items-center mb-4">
                 <h4 className="text-md font-medium text-gray-700">Resultados do Relatório</h4>
@@ -657,57 +712,98 @@ useEffect(() => {
                 </span>
               </div>
               
-              <div className="overflow-x-auto bg-gray-50 rounded-lg p-4">
-                <table className="min-w-full divide-y divide-gray-200">
-                  <thead>
-                    <tr>
-                      <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase">Foto</th>
-                      <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase">Funcionário</th>
-                      <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase">Data/Hora</th>
-                      <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase">Coordenadas</th>
-                      <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase">Dispositivo</th>
-                    </tr>
-                  </thead>
-                  <tbody className="bg-white divide-y divide-gray-200">
-                    {reportData.map((item) => (
-                      <tr key={item.id} className="hover:bg-gray-50">
-                        <td className="px-6 py-4 whitespace-nowrap">
-                          <img 
-                            src={item.photoUrl ? getThumbnailUrl(item.photoUrl) : 'https://via.placeholder.com/150'} 
-                            alt="Check-in" 
-                            className="h-16 w-16 rounded-md object-cover cursor-pointer"
-                            onClick={() => setSelectedImage(item.photoUrl)}
-                            onError={(e) => {
-                              e.target.onerror = null;
-                              e.target.src = 'https://via.placeholder.com/150';
-                            }}
-                          />
-                        </td>
-                        <td className="px-6 py-4 whitespace-nowrap text-sm font-medium text-gray-900">
-                          {item.username || 'Não identificado'}
-                        </td>
-                        <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-500">
-                          {formatDateTime(item.timestamp)}
-                        </td>
-                        <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-500">
-                          <a 
-                            href={`https://www.google.com/maps?q=${item.location.latitude},${item.location.longitude}`} 
-                            target="_blank" 
-                            rel="noopener noreferrer"
-                            className="text-blue-600 hover:underline"
-                          >
-                            {item.address || `${item.location.latitude.toFixed(6)}, ${item.location.longitude.toFixed(6)}`}
-                          </a>
-                        </td>
-                        <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-500">
-                          {item.deviceInfo ? item.deviceInfo.substring(0, 20) + '...' : 'N/A'}
-                        </td>
-                      </tr>
-                    ))}
-                  </tbody>
-                </table>
+              {/* Nova visualização melhorada dos check-ins */}
+              <div className="space-y-6">
+                {reportData.map((item) => (
+                  <div key={item.id} className="bg-gray-50 rounded-lg p-4 shadow-sm hover:shadow-md transition-shadow">
+                    <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+                      {/* Foto do check-in */}
+                      <div className="md:col-span-1">
+                        <div className="w-full h-40 bg-gray-200 rounded-lg overflow-hidden">
+                        <img 
+                          src={item.photoUrl || 'https://via.placeholder.com/400x300?text=Sem+foto'} 
+                          alt="Check-in" 
+                          className="w-full h-full object-cover cursor-pointer"
+                          onClick={() => {
+                            console.log("URL da imagem:", item.photoUrl);
+                            setSelectedImage(item.photoUrl);
+                          }}
+                          onError={(e) => {
+                            console.error("Erro ao carregar imagem:", item.photoUrl);
+                            e.target.onerror = null;
+                            e.target.src = 'https://via.placeholder.com/400x300?text=Imagem+não+disponível';
+                          }}
+                        />
+                        </div>
+                      </div>
+                      
+                      {/* Informações do check-in */}
+                      <div className="md:col-span-2">
+                        <h3 className="text-lg font-medium text-gray-900 mb-2">
+                          {item.username || 'Funcionário não identificado'}
+                        </h3>
+                        
+                        <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
+                          <div>
+                            <p className="text-sm text-gray-500 flex items-center">
+                              <svg xmlns="http://www.w3.org/2000/svg" className="h-4 w-4 mr-1" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M8 7V3m8 4V3m-9 8h10M5 21h14a2 2 0 002-2V7a2 2 0 00-2-2H5a2 2 0 00-2 2v12a2 2 0 002 2z" />
+                              </svg>
+                              <span className="font-medium">{new Date(item.timestamp).toLocaleDateString('pt-BR')}</span>
+                            </p>
+                            
+                            <p className="text-sm text-gray-500 flex items-center mt-1">
+                              <svg xmlns="http://www.w3.org/2000/svg" className="h-4 w-4 mr-1" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 8v4l3 3m6-3a9 9 0 11-18 0 9 9 0 0118 0z" />
+                              </svg>
+                              <span className="font-medium">{new Date(item.timestamp).toLocaleTimeString('pt-BR')}</span>
+                            </p>
+                          </div>
+                          
+                          <div>
+                            <p className="text-sm text-gray-500 flex items-start">
+                              <svg xmlns="http://www.w3.org/2000/svg" className="h-4 w-4 mr-1 mt-0.5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M17.657 16.657L13.414 20.9a1.998 1.998 0 01-2.827 0l-4.244-4.243a8 8 0 1111.314 0z" />
+                                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15 11a3 3 0 11-6 0 3 3 0 016 0z" />
+                              </svg>
+                              <span className="font-medium">
+                                {item.address || 'Endereço não disponível'}
+                              </span>
+                            </p>
+                            
+                            <div className="mt-2">
+                              <a 
+                                href={`https://www.google.com/maps?q=${item.location.latitude},${item.location.longitude}`} 
+                                target="_blank" 
+                                rel="noopener noreferrer"
+                                className="text-sm text-blue-600 hover:text-blue-800 hover:underline inline-flex items-center"
+                              >
+                                <svg xmlns="http://www.w3.org/2000/svg" className="h-4 w-4 mr-1" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M10 6H6a2 2 0 00-2 2v10a2 2 0 002 2h10a2 2 0 002-2v-4M14 4h6m0 0v6m0-6L10 14" />
+                                </svg>
+                                Ver no mapa
+                              </a>
+                            </div>
+                          </div>
+                        </div>
+                        
+                        {item.deviceInfo && (
+                          <div className="mt-3 text-xs text-gray-500 bg-gray-100 p-2 rounded">
+                            <span className="font-medium">Dispositivo:</span> {item.deviceInfo}
+                          </div>
+                        )}
+                      </div>
+                    </div>
+                  </div>
+                ))}
               </div>
             </div>
+          ) : (
+            reportData.length === 0 && !isGeneratingReport && (
+              <div className="text-center py-8 text-gray-500">
+                Selecione os filtros e clique em "Gerar Relatório" para visualizar os resultados.
+              </div>
+            )
           )}
         </div>
       </div>
@@ -731,7 +827,6 @@ useEffect(() => {
           </div>
         </div>
       </header>
-
       {/* Conteúdo principal */}
       <main className="flex-1 max-w-7xl w-full mx-auto px-4 sm:px-6 lg:px-8 py-6">
         {/* Navegação por abas */}
@@ -914,6 +1009,58 @@ useEffect(() => {
           </div>
         </div>
       )}
+
+      {/* Modal para entrada de senha do admin */}
+    {showPasswordModal && (
+      <div className="fixed z-20 inset-0 overflow-y-auto">
+        <div className="flex items-end justify-center min-h-screen pt-4 px-4 pb-20 text-center sm:block sm:p-0">
+          <div className="fixed inset-0 transition-opacity" aria-hidden="true">
+            <div className="absolute inset-0 bg-gray-500 opacity-75"></div>
+          </div>
+
+          <span className="hidden sm:inline-block sm:align-middle sm:h-screen" aria-hidden="true">&#8203;</span>
+
+          <div className="inline-block align-bottom bg-white rounded-lg text-left overflow-hidden shadow-xl transform transition-all sm:my-8 sm:align-middle sm:max-w-lg sm:w-full">
+            <div className="bg-white px-4 pt-5 pb-4 sm:p-6 sm:pb-4">
+              <h3 className="text-lg leading-6 font-medium text-gray-900 mb-4">
+                Confirmação de senha
+              </h3>
+              <p className="mb-4 text-sm text-gray-600">
+                Para criar um novo usuário, precisamos de sua senha de administrador para manter sua sessão:
+              </p>
+              <input
+                type="password"
+                value={adminPasswordInput}
+                onChange={(e) => setAdminPasswordInput(e.target.value)}
+                className="mt-1 block w-full border border-gray-300 rounded-md shadow-sm py-2 px-3 focus:outline-none focus:ring-blue-500 focus:border-blue-500 sm:text-sm"
+                placeholder="Senha de administrador"
+              />
+            </div>
+            
+            <div className="bg-gray-50 px-4 py-3 sm:px-6 sm:flex sm:flex-row-reverse">
+              <button
+                type="button"
+                onClick={handlePasswordConfirm}
+                disabled={isSubmitting || !adminPasswordInput}
+                className="w-full inline-flex justify-center rounded-md border border-transparent shadow-sm px-4 py-2 bg-blue-600 text-base font-medium text-white hover:bg-blue-700 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-blue-500 sm:ml-3 sm:w-auto sm:text-sm"
+              >
+                {isSubmitting ? 'Processando...' : 'Confirmar'}
+              </button>
+              <button
+                type="button"
+                className="mt-3 w-full inline-flex justify-center rounded-md border border-gray-300 shadow-sm px-4 py-2 bg-white text-base font-medium text-gray-700 hover:bg-gray-50 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-indigo-500 sm:mt-0 sm:ml-3 sm:w-auto sm:text-sm"
+                onClick={() => {
+                  setShowPasswordModal(false);
+                  setAdminPasswordInput('');
+                }}
+              >
+                Cancelar
+              </button>
+            </div>
+          </div>
+        </div>
+      </div>
+    )}
     </div>
   );
 };
