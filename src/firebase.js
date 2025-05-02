@@ -1,8 +1,6 @@
-// src/firebase.js
 import { initializeApp } from 'firebase/app';
-import { getAuth } from 'firebase/auth';
+import { getAuth, setPersistence, browserLocalPersistence } from 'firebase/auth';
 import { getFirestore } from 'firebase/firestore';
-import { setPersistence, browserLocalPersistence } from 'firebase/auth';
 
 // Substitua com seus próprios dados de configuração
 const firebaseConfig = {
@@ -17,11 +15,17 @@ const app = initializeApp(firebaseConfig);
 const auth = getAuth(app);
 const db = getFirestore(app);
 
+// Função para configurar persistência (deve ser chamada no componente de inicialização do app)
+export const configureAuthPersistence = async () => {
+  try {
+    await setPersistence(auth, browserLocalPersistence);
+    console.log('Persistência configurada com sucesso');
+    return true;
+  } catch (error) {
+    console.error('Erro ao configurar persistência:', error);
+    return false;
+  }
+};
+
 export { auth, db };
 export default app;
-
-// Configurar persistência
-setPersistence(auth, browserLocalPersistence)
-  .catch((error) => {
-    console.error("Erro ao configurar persistência:", error);
-  });
