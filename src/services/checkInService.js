@@ -48,6 +48,7 @@ import {
         
         resolve({ data: checkIns, unsubscribe });
       }, reject);
+      return () => unsubscribe();
     });
   };
   
@@ -55,7 +56,6 @@ import {
   // Função auxiliar para obter endereço a partir de coordenadas
 const getAddressFromCoordinates = async (latitude, longitude) => {
   try {
-    console.log(`Buscando endereço para: ${latitude}, ${longitude}`);
     const response = await fetch(
       `https://nominatim.openstreetmap.org/reverse?format=json&lat=${latitude}&lon=${longitude}&zoom=18&addressdetails=1`,
       {
@@ -69,9 +69,7 @@ const getAddressFromCoordinates = async (latitude, longitude) => {
       throw new Error(`HTTP error! Status: ${response.status}`);
     }
     
-    const data = await response.json();
-    console.log("Resposta da API de geocodificação:", data);
-    
+    const data = await response.json();    
     if (data && data.display_name) {
       return data.display_name;
     } else {
@@ -93,9 +91,7 @@ export const getCheckInsByDateRange = async (startDate, endDate, securityId = nu
     
     const end = new Date(endDate);
     end.setHours(23, 59, 59, 999);
-    
-    console.log("Intervalo de datas:", start, end);
-    
+        
     // NOME CORRIGIDO DA COLEÇÃO: 'checkIns' em vez de 'check-ins'
     if (securityId) {
       q = query(
@@ -114,16 +110,11 @@ export const getCheckInsByDateRange = async (startDate, endDate, securityId = nu
       );
     }
     
-    const snapshot = await getDocs(q);
-    console.log("Quantidade de check-ins encontrados:", snapshot.size);
-    
+    const snapshot = await getDocs(q);    
     const checkIns = [];
     for (const doc of snapshot.docs) {
       const data = doc.data();
-      
-      // Debug para verificar a estrutura dos dados
-      console.log("Estrutura do check-in:", JSON.stringify(data, null, 2));
-      
+            
       // Verificar se o timestamp existe e converter para Date
       let checkInDate;
       if (data.timestamp && data.timestamp.toDate) {
@@ -136,12 +127,8 @@ export const getCheckInsByDateRange = async (startDate, endDate, securityId = nu
         // Timestamp numérico
         checkInDate = new Date(data.timestamp);
       } else {
-        console.log("Timestamp inválido:", data.timestamp);
         continue; // Pular este check-in
       }
-      
-      console.log("Data do check-in:", checkInDate, "Está no intervalo:", 
-                 checkInDate >= start && checkInDate <= end);
       
       // Verificar se a data está no intervalo
       if (checkInDate >= start && checkInDate <= end) {
@@ -207,7 +194,6 @@ export const getCheckInsByDateRange = async (startDate, endDate, securityId = nu
     // Ordenar pelo timestamp (mais recente primeiro)
     checkIns.sort((a, b) => b.timestamp - a.timestamp);
     
-    console.log("Check-ins filtrados por data:", checkIns.length);
     return checkIns;
   } catch (error) {
     console.error('Erro ao buscar check-ins por período:', error);
