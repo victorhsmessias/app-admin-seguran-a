@@ -6,7 +6,7 @@ import { getRealtimeCheckIns, getCheckInsByDateRange, getCheckInStats } from '..
 import { useNavigate } from 'react-router-dom';
 import { onAuthStateChanged } from 'firebase/auth';
 import { auth, db } from '../firebase';
-import { getDoc, doc, collection, query } from 'firebase/firestore';
+import { getDoc, doc, collection, query, where, getDocs } from 'firebase/firestore';
 
 const AdminDashboard = ({ user, onLogout }) => {
   // Estados para controle da interface
@@ -75,33 +75,33 @@ const AdminDashboard = ({ user, onLogout }) => {
   };
 
   // Carregar dados ao montar o componente
-useEffect(() => {  
-    
-  // Verificar se o usuário já está autenticado
-  if (auth.currentUser) {
-    loadDashboardData();
-  } else {
-    // Configurar um ouvinte para quando a autenticação mudar
-    const unsubscribe = onAuthStateChanged(auth, (user) => {
-      if (user) {
-        loadDashboardData();
-      } else {
-        setLoading(false);
-      }
-    });
-    
-    // Certifique-se de cancelar o ouvinte ao desmontar
-    return () => {
-      unsubscribe();
-      if (guardsListenerRef.current) {
-        guardsListenerRef.current();
-      }
-      if (checkInsListenerRef.current) {
-        checkInsListenerRef.current();
-      }
-    };
-  }
-}, []);
+  useEffect(() => {  
+      
+    // Verificar se o usuário já está autenticado
+    if (auth.currentUser) {
+      loadDashboardData();
+    } else {
+      // Configurar um ouvinte para quando a autenticação mudar
+      const unsubscribe = onAuthStateChanged(auth, (user) => {
+        if (user) {
+          loadDashboardData();
+        } else {
+          setLoading(false);
+        }
+      });
+      
+      // Certifique-se de cancelar o ouvinte ao desmontar
+      return () => {
+        unsubscribe();
+        if (guardsListenerRef.current) {
+          guardsListenerRef.current();
+        }
+        if (checkInsListenerRef.current) {
+          checkInsListenerRef.current();
+        }
+      };
+    }
+  }, []);
 
   // Função para carregar todos os dados necessários
   const loadDashboardData = async () => {
@@ -304,31 +304,150 @@ useEffect(() => {
       return;
     }
 
+    // Evitar múltiplas chamadas se já estiver carregando
+    if (isGeneratingReport) return;
+    
     setIsGeneratingReport(true);
-    setReportData([]); // Limpar dados anteriores
+    setError(null);
 
-    try {
-      console.log("Gerando relatório com filtros:", reportFilter);
+    try {      
+      // Criar datas para filtragem
+      const startDate = new Date(reportFilter.startDate);
+      startDate.setHours(0, 0, 0, 0);
       
-      // Buscar check-ins pelo intervalo de datas e usuário (se especificado)
-      const checkIns = await getCheckInsByDateRange(
-        reportFilter.startDate, 
-        reportFilter.endDate,
-        reportFilter.securityId || null
-      );
+      const endDate = new Date(reportFilter.endDate);
+      endDate.setHours(23, 59, 59, 999);
       
-      console.log("Check-ins encontrados:", checkIns.length, checkIns);
+      // Construir query base - Usando o nome correto da coleção "checkIns"
+      let q;
       
-      if (checkIns.length === 0) {
-        alert('Nenhum registro encontrado para os filtros selecionados.');
+      if (reportFilter.securityId) {
+        // Consulta por usuário específico
+        q = query(collection(db, 'checkIns'), where('userId', '==', reportFilter.securityId));
       } else {
-        setReportData(checkIns);
+        // Consulta para todos os check-ins
+        q = query(collection(db, 'checkIns'));
+      }
+      
+      // Buscar dados
+      const snapshot = await getDocs(q);      
+      const results = [];
+      
+      // Processar documentos
+      snapshot.forEach(doc => {
+        try {
+          const data = doc.data();
+          
+          // Converter timestamp para Date
+          let checkInDate;
+          if (data.timestamp && typeof data.timestamp.toDate === 'function') {
+            checkInDate = data.timestamp.toDate();
+          } else if (data.timestamp && typeof data.timestamp !== 'object') {
+            checkInDate = new Date(data.timestamp);
+          } else {
+            checkInDate = new Date(); // Fallback para data atual
+          }
+          
+          // Filtrar por data
+          if (checkInDate >= startDate && checkInDate <= endDate) {
+            // Validar e processar URL da imagem
+            let photoUrl = data.photoUrl;
+            if (photoUrl && typeof photoUrl === 'string') {
+              if (!photoUrl.startsWith('http')) {
+                photoUrl = null; // Ignorar URLs inválidas
+              }
+            } else {
+              photoUrl = null;
+            }
+            
+            // Garantir que a localização existe
+            const location = data.location || { 
+              latitude: 0, 
+              longitude: 0, 
+              accuracy: 0 
+            };
+            
+            // Adicionar à lista de resultados
+            results.push({
+              id: doc.id,
+              userId: data.userId || '',
+              username: data.username || 'Usuário não identificado',
+              timestamp: checkInDate,
+              location: location,
+              photoUrl: photoUrl,
+              address: 'Carregando endereço...',
+              deviceInfo: data.deviceInfo || 'Dispositivo não informado'
+            });
+          }
+        } catch (itemError) {
+          console.error("Erro ao processar check-in:", itemError);
+          // Continuar com o próximo item
+        }
+      });
+      
+      // Ordenar por data (mais recente primeiro)
+      results.sort((a, b) => b.timestamp - a.timestamp);      
+      // Atualizar estado
+      setReportData(results);
+      
+      // Buscar endereços para cada check-in
+      results.forEach(async (item, index) => {
+        try {
+          if (item.location && item.location.latitude && item.location.longitude) {
+            const address = await getAddressFromCoordinates(
+              item.location.latitude,
+              item.location.longitude
+            );
+            
+            // Atualizar apenas o item específico com o endereço
+            setReportData(current => {
+              const updated = [...current];
+              updated[index] = {...updated[index], address};
+              return updated;
+            });
+          }
+        } catch (addrError) {
+          console.error("Erro ao buscar endereço:", addrError);
+        }
+      });
+      
+      if (results.length === 0) {
+        alert('Nenhum registro encontrado para os filtros selecionados.');
       }
     } catch (error) {
       console.error('Erro ao gerar relatório:', error);
-      alert(`Erro ao gerar o relatório: ${error.message}`);
+      setError(`Erro ao gerar o relatório: ${error.message}`);
     } finally {
       setIsGeneratingReport(false);
+    }
+  };
+
+  // Função para obter endereço a partir de coordenadas
+  const getAddressFromCoordinates = async (latitude, longitude) => {
+    try {
+      const response = await fetch(
+        `https://nominatim.openstreetmap.org/reverse?format=json&lat=${latitude}&lon=${longitude}&zoom=18&addressdetails=1`,
+        {
+          headers: {
+            'User-Agent': 'SecurityMonitoringSystem/1.0'
+          }
+        }
+      );
+      
+      if (!response.ok) {
+        throw new Error(`HTTP error! Status: ${response.status}`);
+      }
+      
+      const data = await response.json();
+      
+      if (data && data.display_name) {
+        return data.display_name;
+      } else {
+        return `Coordenadas: ${latitude.toFixed(6)}, ${longitude.toFixed(6)}`;
+      }
+    } catch (error) {
+      console.error('Erro ao obter endereço:', error);
+      return `Coordenadas: ${latitude.toFixed(6)}, ${longitude.toFixed(6)}`;
     }
   };
 
@@ -614,53 +733,162 @@ useEffect(() => {
     );
   };
 
+  // Usar useMemo para evitar re-renderizações desnecessárias
+  const renderedCheckIns = React.useMemo(() => {
+    return reportData.map((item) => (
+      <div key={item.id} className="bg-gray-50 rounded-lg p-4 shadow-sm hover:shadow-md transition-shadow mb-4">
+        <div className="grid grid-cols-4 gap-3">
+          {/* Foto do check-in */}
+          <div className="md:col-span-1">
+            <div className="w-full h-40 bg-gray-200 rounded-lg overflow-hidden">
+              {item.photoUrl ? (
+                <>
+                  {/* Uso de onLoad para verificar carregamento bem-sucedido */}
+                  <img 
+                    src={item.photoUrl}
+                    alt="Check-in" 
+                    className="w-full h-full object-cover cursor-pointer"
+                    onClick={() => item.photoUrl && setSelectedImage(item.photoUrl)}
+                    onLoad={() => console.log("Imagem carregada com sucesso")}
+                    onError={(e) => {
+                      // Parar propagação de erros
+                      e.target.onerror = null;
+                      // Substituir por imagem de fallback
+                      e.target.src = 'https://via.placeholder.com/400x300?text=Imagem+indisponível';
+                      // Remover cursor pointer quando usar imagem fallback
+                      e.target.classList.remove('cursor-pointer');
+                      e.target.onclick = null;
+                      
+                      // Atualizar o estado para não tentar mais abrir esta imagem
+                      const updatedData = [...reportData];
+                      const itemIndex = updatedData.findIndex(i => i.id === item.id);
+                      if (itemIndex >= 0) {
+                        updatedData[itemIndex] = {...updatedData[itemIndex], photoUrl: null};
+                        setReportData(updatedData);
+                      }
+                    }}
+                  />
+                </>
+              ) : (
+                <div className="w-full h-full flex items-center justify-center bg-gray-100 text-gray-400">
+                  <span>Sem imagem</span>
+                </div>
+              )}
+            </div>
+          </div>
+          
+          {/* Informações do check-in */}
+          <div className="col-span-3">
+            <div className="flex justify-between items-start">
+              <h3 className="text-base font-medium text-gray-900"> {/* Reduzido text-lg para text-base */}
+                {item.username || 'Funcionário não identificado'}
+              </h3>
+              <span className="text-xs text-gray-500">
+                {item.timestamp ? new Date(item.timestamp).toLocaleTimeString('pt-BR', {hour: '2-digit', minute:'2-digit'}) : ''}
+              </span>
+            </div>
+            
+            <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
+              <div>
+                <p className="text-sm text-gray-500 flex items-center">
+                  <svg xmlns="http://www.w3.org/2000/svg" className="h-4 w-4 mr-1" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M8 7V3m8 4V3m-9 8h10M5 21h14a2 2 0 002-2V7a2 2 0 00-2-2H5a2 2 0 00-2 2v12a2 2 0 002 2z" />
+                  </svg>
+                  <span className="font-medium">
+                    {item.timestamp ? new Date(item.timestamp).toLocaleDateString('pt-BR') : 'Data desconhecida'}
+                  </span>
+                </p>
+                
+                <p className="text-sm text-gray-500 flex items-center mt-1">
+                  <svg xmlns="http://www.w3.org/2000/svg" className="h-4 w-4 mr-1" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 8v4l3 3m6-3a9 9 0 11-18 0 9 9 0 0118 0z" />
+                  </svg>
+                  <span className="font-medium">
+                    {item.timestamp ? new Date(item.timestamp).toLocaleTimeString('pt-BR') : 'Hora desconhecida'}
+                  </span>
+                </p>
+              </div>
+              
+              <div>
+                <p className="text-sm text-gray-500 flex items-start">
+                  <svg xmlns="http://www.w3.org/2000/svg" className="h-4 w-4 mr-1 mt-0.5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M17.657 16.657L13.414 20.9a1.998 1.998 0 01-2.827 0l-4.244-4.243a8 8 0 1111.314 0z" />
+                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15 11a3 3 0 11-6 0 3 3 0 016 0z" />
+                  </svg>
+                  <span className="font-medium">
+                    {item.address || 'Carregando endereço...'}
+                  </span>
+                </p>
+                
+                <div className="mt-2">
+                  <a 
+                    href={item.location?.latitude ? 
+                      `https://www.google.com/maps?q=${item.location.latitude},${item.location.longitude}` : 
+                      '#'}
+                    target="_blank" 
+                    rel="noopener noreferrer"
+                    className="text-sm text-blue-600 hover:text-blue-800 hover:underline inline-flex items-center"
+                  >
+                    <svg xmlns="http://www.w3.org/2000/svg" className="h-4 w-4 mr-1" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M10 6H6a2 2 0 00-2 2v10a2 2 0 002 2h10a2 2 0 002-2v-4M14 4h6m0 0v6m0-6L10 14" />
+                    </svg>
+                    Ver no mapa
+                  </a>
+                </div>
+              </div>
+            </div>
+            
+            {item.deviceInfo && (
+              <div className="mt-3 text-xs text-gray-500 bg-gray-100 p-2 rounded">
+                <span className="font-medium">Dispositivo:</span> {item.deviceInfo}
+              </div>
+            )}
+          </div>
+        </div>
+      </div>
+    ));
+  }, [reportData, setSelectedImage]); // Dependências do useMemo
+    
   // JSX para a aba de relatórios
   const renderReports = () => {
     return (
       <div className="bg-white shadow rounded-lg overflow-hidden">
-        <div className="px-4 py-5 border-b border-gray-200 sm:px-6">
-          <h3 className="text-lg leading-6 font-medium text-gray-900">Gerar Relatórios</h3>
+        <div className="px-3 py-3 border-b border-gray-200">
+          <h3 className="text-base font-medium text-gray-900">Relatórios</h3>
         </div>
-        <div className="p-6">
-          <div className="grid grid-cols-1 gap-6 md:grid-cols-2 mb-6">
-            <div>
-              <label className="block text-sm font-medium text-gray-700 mb-2">
-                Data Inicial
-              </label>
+        
+        <div className="p-3">
+          {/* Filtros em linha para economizar espaço */}
+          <div className="flex flex-wrap gap-2 mb-3">
+            <div className="flex-grow min-w-[120px]">
+              <label className="block text-xs font-medium text-gray-700 mb-1">Data Inicial</label>
               <input
                 type="date"
                 name="startDate"
                 value={reportFilter.startDate}
                 onChange={handleReportFilterChange}
-                className="shadow-sm focus:ring-blue-500 focus:border-blue-500 block w-full sm:text-sm border-gray-300 rounded-md p-2 border"
+                className="w-full text-xs border-gray-300 rounded-md p-1 border"
               />
             </div>
-            <div>
-              <label className="block text-sm font-medium text-gray-700 mb-2">
-                Data Final
-              </label>
+            <div className="flex-grow min-w-[120px]">
+              <label className="block text-xs font-medium text-gray-700 mb-1">Data Final</label>
               <input
                 type="date"
                 name="endDate"
                 value={reportFilter.endDate}
                 onChange={handleReportFilterChange}
-                className="shadow-sm focus:ring-blue-500 focus:border-blue-500 block w-full sm:text-sm border-gray-300 rounded-md p-2 border"
+                className="w-full text-xs border-gray-300 rounded-md p-1 border"
               />
             </div>
-          </div>
-
-          <div className="grid grid-cols-1 gap-6 md:grid-cols-2 mb-6">
-            <div>
-              <label className="block text-sm font-medium text-gray-700 mb-2">
-                Funcionário
-              </label>
+            <div className="flex-grow min-w-[140px]">
+              <label className="block text-xs font-medium text-gray-700 mb-1">Funcionário</label>
               <select
                 name="securityId"
                 value={reportFilter.securityId}
                 onChange={handleReportFilterChange}
-                className="shadow-sm focus:ring-blue-500 focus:border-blue-500 block w-full sm:text-sm border-gray-300 rounded-md p-2 border"
+                className="w-full text-xs border-gray-300 rounded-md p-1 border"
               >
-                <option value="">Todos os funcionários</option>
+                <option value="">Escolher</option>
                 {securityGuards
                   .filter(guard => guard.role === 'security')
                   .map(guard => (
@@ -670,138 +898,103 @@ useEffect(() => {
                 ))}
               </select>
             </div>
-          </div>
-
-          <div className="flex justify-end space-x-3">
-            <button
-              type="button"
-              onClick={handleGenerateReport}
-              disabled={isGeneratingReport}
-              className="inline-flex items-center px-4 py-2 border border-transparent text-sm font-medium rounded-md shadow-sm text-white bg-blue-600 hover:bg-blue-700 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-blue-500"
-            >
-              {isGeneratingReport ? (
-                <>
-                  <svg className="animate-spin -ml-1 mr-2 h-4 w-4 text-white" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24">
-                    <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4"></circle>
-                    <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path>
-                  </svg>
-                  Gerando...
-                </>
-              ) : (
-                "Gerar Relatório"
-              )}
-            </button>
-            
-            {reportData.length > 0 && (
+            <div className="flex items-end">
               <button
                 type="button"
-                onClick={handleExportCSV}
-                className="inline-flex items-center px-4 py-2 border border-gray-300 text-sm font-medium rounded-md shadow-sm text-gray-700 bg-white hover:bg-gray-50 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-blue-500"
+                onClick={handleGenerateReport}
+                disabled={isGeneratingReport}
+                className="px-2 py-1 text-xs rounded text-white bg-blue-600 hover:bg-blue-700"
               >
-                Exportar CSV
+                {isGeneratingReport ? "..." : "Gerar"}
               </button>
-            )}
+              
+              {reportData.length > 0 && (
+                <button
+                  type="button"
+                  onClick={handleExportCSV}
+                  className="ml-1 px-2 py-1 text-xs rounded border border-gray-300 bg-white"
+                >
+                  CSV
+                </button>
+              )}
+            </div>
           </div>
 
+          {/* Exibir erro se houver */}
+          {error && (
+            <div className="mb-2 text-xs text-red-600">
+              {error}
+            </div>
+          )}
+
+          {/* Resultados em formato compacto */}
           {reportData.length > 0 ? (
-            <div className="mt-8 border-t border-gray-200 pt-6">
-              <div className="flex justify-between items-center mb-4">
-                <h4 className="text-md font-medium text-gray-700">Resultados do Relatório</h4>
-                <span className="text-sm text-gray-500">
-                  {reportData.length} check-ins encontrados
-                </span>
+            <>
+              <div className="flex justify-between items-center mb-2 text-xs border-t border-gray-200 pt-2">
+                <span className="font-medium text-gray-700">Resultados ({reportData.length})</span>
               </div>
               
-              {/* Nova visualização melhorada dos check-ins */}
-              <div className="space-y-6">
+              <div className="space-y-1 max-h-[500px] overflow-y-auto">
                 {reportData.map((item) => (
-                  <div key={item.id} className="bg-gray-50 rounded-lg p-4 shadow-sm hover:shadow-md transition-shadow">
-                    <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
-                      {/* Foto do check-in */}
-                      <div className="md:col-span-1">
-                        <div className="w-full h-40 bg-gray-200 rounded-lg overflow-hidden">
+                  <div key={item.id} className="bg-gray-50 rounded p-2 flex items-center gap-2 text-xs">
+                    {/* Miniatura */}
+                    <div className="flex-shrink-0 w-12 h-12 bg-gray-200 rounded overflow-hidden">
+                      {item.photoUrl ? (
                         <img 
-                          src={item.photoUrl || 'https://via.placeholder.com/400x300?text=Sem+foto'} 
-                          alt="Check-in" 
+                          src={item.photoUrl}
+                          alt=""
                           className="w-full h-full object-cover cursor-pointer"
-                          onClick={() => {
-                            console.log("URL da imagem:", item.photoUrl);
-                            setSelectedImage(item.photoUrl);
-                          }}
+                          onClick={() => item.photoUrl && setSelectedImage(item.photoUrl)}
                           onError={(e) => {
-                            console.error("Erro ao carregar imagem:", item.photoUrl);
                             e.target.onerror = null;
-                            e.target.src = 'https://via.placeholder.com/400x300?text=Imagem+não+disponível';
+                            e.target.src = 'https://via.placeholder.com/100?text=N/A';
+                            e.target.classList.remove('cursor-pointer');
                           }}
                         />
+                      ) : (
+                        <div className="w-full h-full flex items-center justify-center bg-gray-100 text-[10px] text-gray-400">
+                          N/A
                         </div>
+                      )}
+                    </div>
+                    
+                    {/* Info principal */}
+                    <div className="flex-grow min-w-0">
+                      <div className="flex items-baseline justify-between">
+                        <span className="font-semibold truncate">{item.username || 'Não identificado'}</span>
+                        <span className="text-[10px] text-gray-500 ml-1 whitespace-nowrap">
+                          {item.timestamp ? new Date(item.timestamp).toLocaleDateString('pt-BR') : '??/??/????'}
+                          {' '}
+                          {item.timestamp ? new Date(item.timestamp).toLocaleTimeString('pt-BR', {hour: '2-digit', minute:'2-digit'}) : '??:??'}
+                        </span>
                       </div>
-                      
-                      {/* Informações do check-in */}
-                      <div className="md:col-span-2">
-                        <h3 className="text-lg font-medium text-gray-900 mb-2">
-                          {item.username || 'Funcionário não identificado'}
-                        </h3>
-                        
-                        <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
-                          <div>
-                            <p className="text-sm text-gray-500 flex items-center">
-                              <svg xmlns="http://www.w3.org/2000/svg" className="h-4 w-4 mr-1" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M8 7V3m8 4V3m-9 8h10M5 21h14a2 2 0 002-2V7a2 2 0 00-2-2H5a2 2 0 00-2 2v12a2 2 0 002 2z" />
-                              </svg>
-                              <span className="font-medium">{new Date(item.timestamp).toLocaleDateString('pt-BR')}</span>
-                            </p>
-                            
-                            <p className="text-sm text-gray-500 flex items-center mt-1">
-                              <svg xmlns="http://www.w3.org/2000/svg" className="h-4 w-4 mr-1" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 8v4l3 3m6-3a9 9 0 11-18 0 9 9 0 0118 0z" />
-                              </svg>
-                              <span className="font-medium">{new Date(item.timestamp).toLocaleTimeString('pt-BR')}</span>
-                            </p>
-                          </div>
-                          
-                          <div>
-                            <p className="text-sm text-gray-500 flex items-start">
-                              <svg xmlns="http://www.w3.org/2000/svg" className="h-4 w-4 mr-1 mt-0.5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M17.657 16.657L13.414 20.9a1.998 1.998 0 01-2.827 0l-4.244-4.243a8 8 0 1111.314 0z" />
-                                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15 11a3 3 0 11-6 0 3 3 0 016 0z" />
-                              </svg>
-                              <span className="font-medium">
-                                {item.address || 'Endereço não disponível'}
-                              </span>
-                            </p>
-                            
-                            <div className="mt-2">
-                              <a 
-                                href={`https://www.google.com/maps?q=${item.location.latitude},${item.location.longitude}`} 
-                                target="_blank" 
-                                rel="noopener noreferrer"
-                                className="text-sm text-blue-600 hover:text-blue-800 hover:underline inline-flex items-center"
-                              >
-                                <svg xmlns="http://www.w3.org/2000/svg" className="h-4 w-4 mr-1" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M10 6H6a2 2 0 00-2 2v10a2 2 0 002 2h10a2 2 0 002-2v-4M14 4h6m0 0v6m0-6L10 14" />
-                                </svg>
-                                Ver no mapa
-                              </a>
-                            </div>
-                          </div>
-                        </div>
-                        
-                        {item.deviceInfo && (
-                          <div className="mt-3 text-xs text-gray-500 bg-gray-100 p-2 rounded">
-                            <span className="font-medium">Dispositivo:</span> {item.deviceInfo}
-                          </div>
-                        )}
-                      </div>
+                      <div className="truncate text-gray-600">{item.address || 'Localização não disponível'}</div>
+                    </div>
+                    
+                    {/* Ações */}
+                    <div className="flex-shrink-0">
+                      <a 
+                        href={item.location?.latitude ? 
+                          `https://www.google.com/maps?q=${item.location.latitude},${item.location.longitude}` : 
+                          '#'}
+                        target="_blank" 
+                        rel="noopener noreferrer"
+                        className="text-blue-600 hover:text-blue-800 text-[10px]"
+                        title="Ver no mapa"
+                      >
+                        <svg xmlns="http://www.w3.org/2000/svg" className="h-4 w-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                          <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 20l-5.447-2.724A1 1 0 013 16.382V5.618a1 1 0 011.447-.894L9 7m0 13l6-3m-6 3V7m6 10l4.553 2.276A1 1 0 0021 18.382V7.618a1 1 0 00-.553-.894L15 4m0 13V4m0 0L9 7" />
+                        </svg>
+                      </a>
                     </div>
                   </div>
                 ))}
               </div>
-            </div>
+            </>
           ) : (
-            reportData.length === 0 && !isGeneratingReport && (
-              <div className="text-center py-8 text-gray-500">
-                Selecione os filtros e clique em "Gerar Relatório" para visualizar os resultados.
+            !isGeneratingReport && (
+              <div className="text-center py-3 text-xs text-gray-500">
+                Selecione os filtros e clique em "Gerar" para ver os resultados.
               </div>
             )
           )}
