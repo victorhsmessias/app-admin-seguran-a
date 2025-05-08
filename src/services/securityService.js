@@ -7,7 +7,8 @@ import {
   getDoc, 
   query, 
   where,
-  onSnapshot 
+  onSnapshot,
+  getDocs 
 } from 'firebase/firestore';
 import { 
   createUserWithEmailAndPassword,
@@ -20,13 +21,19 @@ import { auth, db } from '../firebase'; // Importe a instância auth específica
 
 let adminCredentials = null;
 
-// Buscar todos os seguranças (sem alterações)
+// Lista de funções operacionais (não administrativas)
+const operationalRoles = ['security', 'vigia', 'porteiro', 'zelador', 'supervisor', 'sdf'];
+
+// Função auxiliar para verificar se é função operacional
+export const isOperationalRole = (role) => {
+  return operationalRoles.includes(role);
+};
+
+// Buscar todos os funcionários (atualizado para incluir todas as funções)
 export const getAllSecurityGuards = () => {
   return new Promise((resolve, reject) => {
-    const q = query(
-      collection(db, 'users'), 
-      where('role', '==', 'security')
-    );
+    // Alterado para buscar todos os usuários, não apenas os de segurança
+    const q = query(collection(db, 'users'));
     
     const unsubscribe = onSnapshot(q, (snapshot) => {
       const securityGuards = [];
@@ -41,7 +48,28 @@ export const getAllSecurityGuards = () => {
   });
 };
 
-// Buscar um segurança específico (sem alterações)
+// Buscar funcionários operacionais (para relatórios)
+export const getOperationalStaff = () => {
+  return new Promise((resolve, reject) => {
+    const q = query(
+      collection(db, 'users'), 
+      where('role', 'in', operationalRoles)
+    );
+    
+    const unsubscribe = onSnapshot(q, (snapshot) => {
+      const staff = [];
+      snapshot.forEach((doc) => {
+        staff.push({
+          id: doc.id,
+          ...doc.data()
+        });
+      });
+      resolve({ data: staff, unsubscribe });
+    }, reject);
+  });
+};
+
+// Buscar um funcionário específico
 export const getSecurityGuard = async (id) => {
   try {
     const docRef = doc(db, 'users', id);
@@ -53,15 +81,15 @@ export const getSecurityGuard = async (id) => {
         ...docSnap.data()
       };
     } else {
-      throw new Error('Segurança não encontrado');
+      throw new Error('Funcionário não encontrado');
     }
   } catch (error) {
-    console.error('Erro ao buscar segurança:', error);
+    console.error('Erro ao buscar funcionário:', error);
     throw error;
   }
 };
 
-// Criar um novo segurança 
+// Criar um novo funcionário 
 export const createSecurityGuard = async (guardData, password, adminEmail, adminPassword) => {
   try {
     
@@ -109,7 +137,7 @@ export const createSecurityGuard = async (guardData, password, adminEmail, admin
       ...userData
     };
   } catch (error) {
-    console.error('Erro ao criar segurança:', error);
+    console.error('Erro ao criar funcionário:', error);
     
     // Se ocorrer um erro, tentar fazer login novamente com o admin
     if (adminCredentials) {
@@ -124,7 +152,8 @@ export const createSecurityGuard = async (guardData, password, adminEmail, admin
     throw error;
   }
 };
-// Atualizar um segurança existente (Corrigido)
+
+// Atualizar um funcionário existente
 export const updateSecurityGuard = async (id, guardData) => {
   try {
     // Verificar autenticação atual
@@ -157,12 +186,12 @@ export const updateSecurityGuard = async (id, guardData) => {
       ...updateData
     };
   } catch (error) {
-    console.error('Erro ao atualizar segurança:', error);
+    console.error('Erro ao atualizar funcionário:', error);
     throw error;
   }
 };
 
-// Excluir um segurança - Implementação corrigida
+// Excluir um funcionário
 export const deleteSecurityGuard = async (id) => {
   try {
     
@@ -205,7 +234,45 @@ export const deleteSecurityGuard = async (id) => {
     
     return true;
   } catch (error) {
-    console.error('Erro ao excluir segurança:', error);
+    console.error('Erro ao excluir funcionário:', error);
+    throw error;
+  }
+};
+
+// Obter contagem de funcionários por função
+export const getStaffCountByRole = async () => {
+  try {
+    const snapshot = await getDocs(collection(db, 'users'));
+    
+    // Inicializar contadores
+    const counts = {
+      admin: 0,
+      security: 0,
+      vigia: 0,
+      porteiro: 0,
+      zelador: 0,
+      rh: 0,
+      supervisor: 0,
+      sdf: 0,
+      total: 0
+    };
+    
+    // Contar funcionários por função
+    snapshot.forEach(doc => {
+      const userData = doc.data();
+      counts.total++;
+      
+      if (userData.role && counts[userData.role] !== undefined) {
+        counts[userData.role]++;
+      } else {
+        // Para funções não reconhecidas
+        counts.security++; // Considerando como segurança por padrão
+      }
+    });
+    
+    return counts;
+  } catch (error) {
+    console.error('Erro ao obter contagem de funcionários:', error);
     throw error;
   }
 };
