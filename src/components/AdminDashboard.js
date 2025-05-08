@@ -8,6 +8,23 @@ import { onAuthStateChanged } from 'firebase/auth';
 import { auth, db } from '../firebase';
 import { getDoc, doc, collection, query, where, getDocs } from 'firebase/firestore';
 
+// Mapeamento de funções para exibição em português
+const roleMappings = {
+  'admin': { text: 'Administrador', bgColor: 'bg-purple-100', textColor: 'text-purple-800' },
+  'security': { text: 'Segurança', bgColor: 'bg-green-100', textColor: 'text-green-800' },
+  'vigia': { text: 'Vigia', bgColor: 'bg-blue-100', textColor: 'text-blue-800' },
+  'porteiro': { text: 'Porteiro', bgColor: 'bg-indigo-100', textColor: 'text-indigo-800' },
+  'zelador': { text: 'Zelador', bgColor: 'bg-yellow-100', textColor: 'text-yellow-800' },
+  'rh': { text: 'RH', bgColor: 'bg-pink-100', textColor: 'text-pink-800' },
+  'supervisor': { text: 'Supervisor', bgColor: 'bg-orange-100', textColor: 'text-orange-800' },
+  'sdf': { text: 'SDF', bgColor: 'bg-teal-100', textColor: 'text-teal-800' }
+};
+
+// Função auxiliar para verificar se o funcionário é operacional (não admin)
+const isOperationalRole = (role) => {
+  return role !== 'admin' && role !== 'rh';
+};
+
 const AdminDashboard = ({ user, onLogout }) => {
   // Estados para controle da interface
   const [loading, setLoading] = useState(true);
@@ -117,11 +134,11 @@ const AdminDashboard = ({ user, onLogout }) => {
       setCheckIns(checkInsResult.data);
       checkInsListenerRef.current = checkInsResult.unsubscribe;
       
-      // Buscar estatísticas
+      // Buscar estatísticas - agora contando todas as funções operacionais
       const statsData = await getCheckInStats();
       setStats({
         totalGuards: guardsResult.data.length,
-        activeGuards: guardsResult.data.filter(guard => guard.role === 'security').length,
+        activeGuards: guardsResult.data.filter(guard => isOperationalRole(guard.role)).length,
         checkInsToday: statsData.todayCount
       });
 
@@ -528,7 +545,7 @@ const AdminDashboard = ({ user, onLogout }) => {
           <div className="bg-white overflow-hidden shadow rounded-lg">
             <div className="px-4 py-5 sm:p-6">
               <dl>
-                <dt className="text-sm font-medium text-gray-500 truncate">Total de Seguranças</dt>
+                <dt className="text-sm font-medium text-gray-500 truncate">Total de Funcionários</dt>
                 <dd className="mt-1 text-3xl font-semibold text-gray-900">{stats.totalGuards}</dd>
               </dl>
             </div>
@@ -536,7 +553,7 @@ const AdminDashboard = ({ user, onLogout }) => {
           <div className="bg-white overflow-hidden shadow rounded-lg">
             <div className="px-4 py-5 sm:p-6">
               <dl>
-                <dt className="text-sm font-medium text-gray-500 truncate">Seguranças Ativos</dt>
+                <dt className="text-sm font-medium text-gray-500 truncate">Funcionários Operacionais</dt>
                 <dd className="mt-1 text-3xl font-semibold text-green-600">{stats.activeGuards}</dd>
               </dl>
             </div>
@@ -561,7 +578,7 @@ const AdminDashboard = ({ user, onLogout }) => {
               <thead className="bg-gray-50">
                 <tr>
                   <th scope="col" className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
-                    Segurança
+                    Funcionário
                   </th>
                   <th scope="col" className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
                     Data/Hora
@@ -584,7 +601,7 @@ const AdminDashboard = ({ user, onLogout }) => {
                             <img 
                               className="h-10 w-10 rounded-full object-cover cursor-pointer" 
                               src={checkIn.photoUrl || 'https://via.placeholder.com/150'} 
-                              alt={checkIn.user?.username || 'Segurança'}
+                              alt={checkIn.user?.username || 'Funcionário'}
                               onClick={() => setSelectedImage(checkIn.photoUrl)}
                               onError={(e) => {
                                 e.target.onerror = null;
@@ -594,7 +611,7 @@ const AdminDashboard = ({ user, onLogout }) => {
                           </div>
                           <div className="ml-4">
                             <div className="text-sm font-medium text-gray-900">
-                              {checkIn.user?.username || 'Segurança'}
+                              {checkIn.user?.username || 'Funcionário'}
                             </div>
                             <div className="text-sm text-gray-500">
                               ID: {checkIn.userId.substring(0, 8)}...
@@ -698,9 +715,9 @@ const AdminDashboard = ({ user, onLogout }) => {
                     </td>
                     <td className="px-6 py-4 whitespace-nowrap">
                       <span className={`px-2 inline-flex text-xs leading-5 font-semibold rounded-full ${
-                        guard.role === 'admin' ? 'bg-purple-100 text-purple-800' : 'bg-green-100 text-green-800'
+                        roleMappings[guard.role]?.bgColor || 'bg-gray-100'} ${roleMappings[guard.role]?.textColor || 'text-gray-800'
                       }`}>
-                        {guard.role === 'admin' ? 'Administrador' : 'Segurança'}
+                        {roleMappings[guard.role]?.text || guard.role}
                       </span>
                     </td>
                     <td className="px-6 py-4 whitespace-nowrap text-right text-sm font-medium">
@@ -890,7 +907,7 @@ const AdminDashboard = ({ user, onLogout }) => {
               >
                 <option value="">Escolher</option>
                 {securityGuards
-                  .filter(guard => guard.role === 'security')
+                  .filter(guard => isOperationalRole(guard.role))
                   .map(guard => (
                     <option key={guard.id} value={guard.id}>
                       {guard.username}
@@ -1151,6 +1168,12 @@ const AdminDashboard = ({ user, onLogout }) => {
                           className="mt-1 block w-full border border-gray-300 rounded-md shadow-sm py-2 px-3 focus:outline-none focus:ring-blue-500 focus:border-blue-500 sm:text-sm"
                         >
                           <option value="security">Segurança</option>
+                          <option value="vigia">Vigia</option>
+                          <option value="porteiro">Porteiro</option>
+                          <option value="zelador">Zelador</option>
+                          <option value="rh">RH</option>
+                          <option value="supervisor">Supervisor</option>
+                          <option value="sdf">SDF</option>
                           <option value="admin">Administrador</option>
                         </select>
                       </div>
