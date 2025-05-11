@@ -1,24 +1,14 @@
 import React, { useState, useEffect, useRef } from 'react';
 import { getAvatarUrl, getThumbnailUrl, getModalViewUrl } from '../utils/imageUtils';
 import { getCurrentUser, logout } from '../services/authService';
+import { formatDateForReport, addReportHeader, addEmployeeInfo, addDocumentFooter } from '../utils/pdfUtils';
 import { getAllSecurityGuards, createSecurityGuard, updateSecurityGuard, deleteSecurityGuard } from '../services/securityService';
 import { getRealtimeCheckIns, getCheckInsByDateRange, getCheckInStats } from '../services/checkInService';
 import { useNavigate } from 'react-router-dom';
 import { onAuthStateChanged } from 'firebase/auth';
 import { auth, db } from '../firebase';
 import { getDoc, doc, collection, query, where, getDocs } from 'firebase/firestore';
-
-// Mapeamento de funções para exibição em português
-const roleMappings = {
-  'admin': { text: 'Administrador', bgColor: 'bg-purple-100', textColor: 'text-purple-800' },
-  'security': { text: 'Segurança', bgColor: 'bg-green-100', textColor: 'text-green-800' },
-  'vigia': { text: 'Vigia', bgColor: 'bg-blue-100', textColor: 'text-blue-800' },
-  'porteiro': { text: 'Porteiro', bgColor: 'bg-indigo-100', textColor: 'text-indigo-800' },
-  'zelador': { text: 'Zelador', bgColor: 'bg-yellow-100', textColor: 'text-yellow-800' },
-  'rh': { text: 'RH', bgColor: 'bg-pink-100', textColor: 'text-pink-800' },
-  'supervisor': { text: 'Supervisor', bgColor: 'bg-orange-100', textColor: 'text-orange-800' },
-  'sdf': { text: 'SDF', bgColor: 'bg-teal-100', textColor: 'text-teal-800' }
-};
+import { roleMappings } from '../utils/roleMappings';
 
 // Função auxiliar para verificar se o funcionário é operacional (não admin)
 const isOperationalRole = (role) => {
@@ -468,61 +458,152 @@ const AdminDashboard = ({ user, onLogout }) => {
     }
   };
 
-  // Função para exportar relatório como CSV
-  const handleExportCSV = () => {
+  // Função para exportar relatório como PDF
+  const handleExportPDF = () => {
     if (reportData.length === 0) {
       alert('Não há dados para exportar.');
       return;
     }
     
-    // Criar cabeçalho CSV mais completo
-    const headers = [
-      'ID', 
-      'Nome do Funcionário', 
-      'Data', 
-      'Hora', 
-      'Latitude', 
-      'Longitude', 
-      'Endereço',
-      'Dispositivo',
-      'URL da Foto'
-    ];
+    setIsGeneratingReport(true);
     
-    const csvContent = [
-      headers.join(','),
-      ...reportData.map(item => {
-        const date = new Date(item.timestamp);
-        
-        return [
-          item.id,
-          (item.username || 'N/A').replace(/,/g, ' '), // Evitar quebras por vírgulas
-          date.toLocaleDateString('pt-BR'),
-          date.toLocaleTimeString('pt-BR'),
-          item.location.latitude,
-          item.location.longitude,
-          (item.address || 'Endereço não disponível').replace(/,/g, ' '),
-          item.deviceInfo ? `"${item.deviceInfo.replace(/"/g, '""')}"` : 'N/A',
-          item.photoUrl || 'N/A'
-        ].join(',');
-      })
-    ].join('\n');
-    
-    // Criar blob e link de download
-    const blob = new Blob([csvContent], { type: 'text/csv;charset=utf-8;' });
-    const url = URL.createObjectURL(blob);
-    const link = document.createElement('a');
-    link.setAttribute('href', url);
-    
-    // Nome do arquivo mais informativo
-    const fileName = reportFilter.securityId 
-      ? `relatorio_${securityGuards.find(g => g.id === reportFilter.securityId)?.username || 'funcionario'}_${reportFilter.startDate}_a_${reportFilter.endDate}.csv`
-      : `relatorio_todos_${reportFilter.startDate}_a_${reportFilter.endDate}.csv`;
-    
-    link.setAttribute('download', fileName);
-    link.style.visibility = 'hidden';
-    document.body.appendChild(link);
-    link.click();
-    document.body.removeChild(link);
+    // Importar jsPDF e plugin autotable de forma dinâmica
+    import('jspdf').then((jsPDFModule) => {
+      import('jspdf-autotable').then(() => {
+        try {
+          const { default: jsPDF } = jsPDFModule;
+          const doc = new jsPDF();
+          
+          // Configurações da página
+          const pageWidth = doc.internal.pageSize.getWidth();
+          const pageHeight = doc.internal.pageSize.getHeight();
+          
+          // Adicionar cabeçalho do relatório
+          const mainTitle = "Sistema de Monitoramento";
+          const subTitle = "Relatório de Check-ins";
+          addReportHeader(doc, mainTitle, subTitle);
+          
+          // Adicionar informações do período
+          doc.setFont('helvetica', 'normal');
+          doc.setFontSize(10);
+          doc.setTextColor(0, 0, 0);
+          
+          let startDateFormatted = reportFilter.startDate ? 
+            formatDateForReport(new Date(reportFilter.startDate)) : 'N/A';
+          let endDateFormatted = reportFilter.endDate ? 
+            formatDateForReport(new Date(reportFilter.endDate)) : 'N/A';
+            
+          const periodoTexto = `Período: ${startDateFormatted} a ${endDateFormatted}`;
+          doc.text(periodoTexto, 15, 50);
+          
+          // Posição Y atual para adicionar elementos
+          let yPos = 60;
+          
+          // Adicionar dados do funcionário se filtrado por um específico
+          if (reportFilter.securityId) {
+            const funcionario = securityGuards.find(g => g.id === reportFilter.securityId);
+            if (funcionario) {
+              // Passar o objeto roleMappings como parâmetro adicional
+              yPos = addEmployeeInfo(doc, funcionario, yPos, roleMappings);
+            }
+          } else {
+            // Relatório geral - adicione um título
+            doc.setFont('helvetica', 'bold');
+            doc.setFontSize(11);
+            doc.setTextColor(0, 51, 102);
+            doc.text("Relatório Geral - Todos os Funcionários", 15, yPos);
+            yPos += 10;
+          }
+          
+          // Preparar dados para a tabela
+          const tableData = reportData.map(item => {
+            const date = new Date(item.timestamp);
+            return [
+              item.username || 'Não identificado',
+              formatDateForReport(date, false),
+              date.toLocaleTimeString('pt-BR', {hour: '2-digit', minute:'2-digit'}),
+              item.address || 'Endereço não disponível',
+              item.deviceInfo ? (item.deviceInfo.length > 25 ? 
+                item.deviceInfo.substring(0, 22) + '...' : item.deviceInfo) : 'N/A'
+            ];
+          });
+          
+          // Definir cabeçalhos da tabela
+          const headers = [
+            'Funcionário', 
+            'Data', 
+            'Hora', 
+            'Localização',
+            'Dispositivo'
+          ];
+          
+          // Estilo personalizado para a tabela
+          const tableStyles = {
+            startY: yPos,
+            styles: { 
+              fontSize: 9,
+              cellPadding: 3
+            },
+            headStyles: { 
+              fillColor: [0, 51, 102],
+              textColor: 255,
+              fontStyle: 'bold'
+            },
+            alternateRowStyles: { 
+              fillColor: [245, 245, 245] 
+            },
+            columnStyles: {
+              0: { fontStyle: 'bold' },
+              3: { cellWidth: 'auto' }
+            },
+            // Ativar quebra de texto para colunas de texto longo
+            columnStyles: {
+              3: { cellWidth: 'auto' },
+              4: { cellWidth: 30 }
+            },
+            // Garantir que a tabela seja completamente visível
+            margin: { top: 10, right: 15, bottom: 10, left: 15 }
+          };
+          
+          // Gerar a tabela
+          doc.autoTable({
+            head: [headers],
+            body: tableData,
+            ...tableStyles,
+            didDrawPage: function(data) {
+              // Aqui você pode adicionar cabeçalhos e rodapés de página
+              // O cabeçalho só será adicionado a partir da segunda página
+              if (data.pageNumber > 1) {
+                addReportHeader(doc, mainTitle, subTitle);
+              }
+            }
+          });
+          
+          // Adicionar informações no final
+          const finalPageY = doc.lastAutoTable.finalY + 10;
+          doc.setFontSize(10);
+          doc.setFont('helvetica', 'bold');
+          doc.text(`Total de registros: ${reportData.length}`, 15, finalPageY);
+          
+          // Adicionar rodapé em todas as páginas
+          addDocumentFooter(doc);
+          
+          // Nome do arquivo para download
+          const fileName = reportFilter.securityId 
+            ? `relatorio_${securityGuards.find(g => g.id === reportFilter.securityId)?.username 
+                || 'funcionario'}_${reportFilter.startDate}_a_${reportFilter.endDate}.pdf`
+            : `relatorio_todos_${reportFilter.startDate}_a_${reportFilter.endDate}.pdf`;
+          
+          // Salvar o PDF
+          doc.save(fileName);
+        } catch (error) {
+          console.error('Erro ao gerar PDF:', error);
+          alert('Ocorreu um erro ao gerar o PDF. Tente novamente.');
+        } finally {
+          setIsGeneratingReport(false);
+        }
+      });
+    });
   };
 
   // JSX para a aba de visão geral (overview)
@@ -928,10 +1009,13 @@ const AdminDashboard = ({ user, onLogout }) => {
               {reportData.length > 0 && (
                 <button
                   type="button"
-                  onClick={handleExportCSV}
-                  className="ml-1 px-2 py-1 text-xs rounded border border-gray-300 bg-white"
+                  onClick={handleExportPDF}
+                  className="ml-1 px-2 py-1 text-xs rounded border border-gray-300 bg-white hover:bg-gray-100 flex items-center"
                 >
-                  CSV
+                  <svg xmlns="http://www.w3.org/2000/svg" className="h-3 w-3 mr-1" viewBox="0 0 20 20" fill="currentColor">
+                    <path fillRule="evenodd" d="M6 2a2 2 0 00-2 2v12a2 2 0 002 2h8a2 2 0 002-2V7.414A2 2 0 0015.414 6L12 2.586A2 2 0 0010.586 2H6zm5 6a1 1 0 10-2 0v3.586l-1.293-1.293a1 1 0 10-1.414 1.414l3 3a1 1 0 001.414 0l3-3a1 1 0 00-1.414-1.414L11 11.586V8z" clipRule="evenodd" />
+                  </svg>
+                  PDF
                 </button>
               )}
             </div>
@@ -1167,14 +1251,14 @@ const AdminDashboard = ({ user, onLogout }) => {
                           onChange={handleFormChange}
                           className="mt-1 block w-full border border-gray-300 rounded-md shadow-sm py-2 px-3 focus:outline-none focus:ring-blue-500 focus:border-blue-500 sm:text-sm"
                         >
-                          <option value="security">Segurança</option>
-                          <option value="vigia">Vigia</option>
-                          <option value="porteiro">Porteiro</option>
-                          <option value="zelador">Zelador</option>
-                          <option value="rh">RH</option>
-                          <option value="supervisor">Supervisor</option>
-                          <option value="sdf">SDF</option>
                           <option value="admin">Administrador</option>
+                          <option value="porteiro">Porteiro</option>
+                          <option value="rh">RH</option>
+                          <option value="sdf">SDF</option>
+                          <option value="security">Segurança</option>
+                          <option value="supervisor">Supervisor</option>
+                          <option value="vigia">Vigia</option>
+                          <option value="zelador">Zelador</option>
                         </select>
                       </div>
                     </div>
