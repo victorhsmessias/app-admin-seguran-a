@@ -111,20 +111,27 @@ const AdminDashboard = ({ user, onLogout }) => {
   }, []);
 
   // Função para carregar todos os dados necessários
-  const loadDashboardData = async () => {
+  const loadDashboardData = async (retryCount = 0) => {
     setLoading(true);
     try {
+      // Forçar atualização do token
+      if (auth.currentUser) {
+        await auth.currentUser.getIdToken(true);
+      } else {
+        throw new Error("Usuário não autenticado");
+      }
+      
       // Buscar seguranças
       const guardsResult = await getAllSecurityGuards();
       setSecurityGuards(guardsResult.data);
       guardsListenerRef.current = guardsResult.unsubscribe;
       
-      // Buscar check-ins em tempo real
+      // Buscar check-ins em tempo real - Use o nome correto da coleção
       const checkInsResult = await getRealtimeCheckIns(20);
       setCheckIns(checkInsResult.data);
       checkInsListenerRef.current = checkInsResult.unsubscribe;
       
-      // Buscar estatísticas - agora contando todas as funções operacionais
+      // Buscar estatísticas
       const statsData = await getCheckInStats();
       setStats({
         totalGuards: guardsResult.data.length,
@@ -134,7 +141,16 @@ const AdminDashboard = ({ user, onLogout }) => {
 
       setLoading(false);
     } catch (error) {
-      console.error('Erro ao carregar dados:', error);
+      console.error(`Erro ao carregar dados (tentativa ${retryCount + 1}):`, error);
+      
+      // Tentar novamente até 3 vezes, com atraso crescente
+      if (retryCount < 2) {
+        setTimeout(() => {
+          loadDashboardData(retryCount + 1);
+        }, (retryCount + 1) * 1000);
+        return;
+      }
+      
       setError('Falha ao carregar os dados. Verifique sua conexão.');
       setLoading(false);
     }
@@ -847,7 +863,6 @@ const AdminDashboard = ({ user, onLogout }) => {
                     alt="Check-in" 
                     className="w-full h-full object-cover cursor-pointer"
                     onClick={() => item.photoUrl && setSelectedImage(item.photoUrl)}
-                    onLoad={() => console.log("Imagem carregada com sucesso")}
                     onError={(e) => {
                       // Parar propagação de erros
                       e.target.onerror = null;

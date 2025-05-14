@@ -11,45 +11,52 @@ import {
     onSnapshot,
     Timestamp 
   } from 'firebase/firestore';
-  import { db } from '../firebase';
+  import { db, auth } from '../firebase';
   
   // Buscar check-ins em tempo real
   export const getRealtimeCheckIns = (limitCount = 20) => {
     return new Promise((resolve, reject) => {
-      const q = query(
-        collection(db, 'check-ins'),
-        orderBy('timestamp', 'desc'),
-        limit(limitCount)
-      );
+    // Verificar autenticação e forçar token atualizado
+    if (!auth.currentUser) {
+      reject(new Error("Usuário não autenticado"));
+      return;
+    }
+    
+    // Use o nome correto da coleção 'checkIns' (sem hífen)
+    const q = query(
+      collection(db, 'checkIns'),  // Nome correto da coleção
+      orderBy('timestamp', 'desc'),
+      limit(limitCount)
+    );
       
-      const unsubscribe = onSnapshot(q, async (snapshot) => {
-        const checkIns = [];
+    const unsubscribe = onSnapshot(q, async (snapshot) => {
+      const checkIns = [];
         
-        // Para cada check-in, buscar informações do segurança
-        const promises = snapshot.docs.map(async (checkInDoc) => {
-          const checkInData = checkInDoc.data();
-          const userDoc = await getDoc(doc(db, 'users', checkInData.userId));
+      // Para cada check-in, buscar informações do segurança
+      const promises = snapshot.docs.map(async (checkInDoc) => {
+        const checkInData = checkInDoc.data();
+        const userDoc = await getDoc(doc(db, 'users', checkInData.userId));
           
-          checkIns.push({
-            id: checkInDoc.id,
-            ...checkInData,
-            timestamp: checkInData.timestamp.toDate(),
-            user: userDoc.exists() ? {
-              id: userDoc.id,
-              ...userDoc.data()
-            } : { id: checkInData.userId }
-          });
+        checkIns.push({
+          id: checkInDoc.id,
+          ...checkInData,
+          timestamp: checkInData.timestamp.toDate(),
+          user: userDoc.exists() ? {
+            id: userDoc.id,
+            ...userDoc.data()
+          } : { id: checkInData.userId }
         });
+      });
         
-        await Promise.all(promises);
+      await Promise.all(promises);
         
-        // Ordenar por timestamp (mais recente primeiro)
-        checkIns.sort((a, b) => b.timestamp - a.timestamp);
+      // Ordenar por timestamp (mais recente primeiro)
+      checkIns.sort((a, b) => b.timestamp - a.timestamp);
         
-        resolve({ data: checkIns, unsubscribe });
-      }, reject);
-      return () => unsubscribe();
-    });
+      resolve({ data: checkIns, unsubscribe });
+    }, reject);
+    return () => unsubscribe();
+  });
   };
   
   // Buscar check-ins por período
@@ -140,9 +147,7 @@ export const getCheckInsByDateRange = async (startDate, endDate, securityId = nu
           userDoc = await getDoc(doc(db, 'users', data.userId));
           if (userDoc.exists()) {
             username = userDoc.data().username || userDoc.data().email || data.userId;
-          } else {
-            console.log("Documento do usuário não encontrado");
-          }
+          } 
         } catch (userError) {
           console.error("Erro ao buscar usuário:", userError);
         }

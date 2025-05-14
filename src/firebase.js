@@ -19,7 +19,6 @@ const db = getFirestore(app);
 export const configureAuthPersistence = async () => {
   try {
     await setPersistence(auth, browserLocalPersistence);
-    console.log('Persistência configurada com sucesso');
     return true;
   } catch (error) {
     console.error('Erro ao configurar persistência:', error);

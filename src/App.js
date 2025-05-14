@@ -1,12 +1,16 @@
 import React, { useState, useEffect, useRef } from 'react';
 import { getThumbnailUrl, getAvatarUrl, getModalViewUrl } from './utils/imageUtils';
-import { loginWithEmailAndPassword, getUserRole } from './services/authService';
-import { getCurrentUser, logout } from './services/authService';
+import { loginWithEmailAndPassword, getUserRole, logout } from './services/authService';
+import { getCurrentUser } from './services/authService';
 import { Routes, Route, Navigate, useNavigate } from 'react-router-dom';
 import PrivateRoute from './components/PrivateRoute';
 import { getAllSecurityGuards } from './services/securityService';
 import { getRealtimeCheckIns, getCheckInStats } from './services/checkInService';
 import AdminDashboard from './components/AdminDashboard';
+// Adicione estas importações:
+import { signInWithEmailAndPassword, signOut } from 'firebase/auth';
+import { getDoc, doc } from 'firebase/firestore';
+import { auth, db } from './firebase';
 // Componente de Login para o Painel Administrativo
 const AdminLogin = ({ onLogin }) => {
   const [username, setUsername] = useState('');
@@ -20,26 +24,37 @@ const AdminLogin = ({ onLogin }) => {
     setError('');
   
     try {
-      const user = await loginWithEmailAndPassword(username, password);
+      // Login com Firebase Auth
+      const userCredential = await signInWithEmailAndPassword(auth, username, password);
+      const user = userCredential.user;
       
-      // Verificar se temos informações do usuário
-      if (!user) {
-        setError('Falha na autenticação. Nenhuma informação de usuário retornada.');
+      // Forçar atualização do token
+      await user.getIdToken(true);
+      
+      // Verificar se o usuário tem papel de admin
+      const userDoc = await getDoc(doc(db, 'users', user.uid));
+      
+      if (!userDoc.exists()) {
+        setError('Perfil de usuário não encontrado. Contate o administrador.');
+        await signOut(auth);
         setLoading(false);
         return;
       }
       
-      const userRole = await getUserRole(user.uid);
-  
-      if (userRole !== 'admin') {
+      const userData = userDoc.data();
+      if (userData.role !== 'admin') {
         setError('Acesso não autorizado. Este aplicativo é apenas para a administração.');
+        await signOut(auth);
         setLoading(false);
         return;
-      }else{
-        // Se chegou aqui, o login foi bem-sucedido
-        onLogin({ username, role: 'admin' });
       }
       
+      // Se chegou aqui, o login foi bem-sucedido
+      onLogin({ 
+        username: userData.username || user.email, 
+        role: 'admin',
+        uid: user.uid 
+      });
     } catch (error) {      
       // Tratamento específico para diferentes tipos de erro do Firebase
       if (error.code === 'auth/invalid-credential') {
@@ -161,66 +176,66 @@ const AdminLogin = ({ onLogin }) => {
 // Componente principal que integra login e dashboard
 const AdminApp = () => {
   const [user, setUser] = useState(null);
-  const [loading, setLoading] = useState(false);
+  const [loading, setLoading] = useState(false); // Iniciar como false
   const [securityGuards, setSecurityGuards] = useState([]);
   const [checkIns, setCheckIns] = useState([]);
   const [stats, setStats] = useState({});
+  const navigate = useNavigate();
 
   const guardsListenerRef = useRef(null);
   const checkInsListenerRef = useRef(null);
 
-  // Carregar dados ao montar o componente
-  useEffect(() => {
-    const loadData = async () => {
-      try {
-        setLoading(true);
-        
-        // Buscar seguranças
-        const guardsResult = await getAllSecurityGuards();
-        setSecurityGuards(guardsResult.data);
-        guardsListenerRef.current = guardsResult.unsubscribe;
-        
-        // Buscar check-ins em tempo real
-        const checkInsResult = await getRealtimeCheckIns(20);
-        setCheckIns(checkInsResult.data);
-        checkInsListenerRef.current = checkInsResult.unsubscribe;
-        
-        // Buscar estatísticas
-        const statsData = await getCheckInStats();
-        setStats({
-          totalGuards: guardsResult.data.length,
-          activeGuards: guardsResult.data.filter(guard => guard.status === 'Ativo').length,
-          checkInsToday: statsData.todayCount
-        });
+  // Remova o useEffect inicial que verifica autenticação e carrega dados
+  // Não queremos nenhum acesso ao Firestore na inicialização do app
 
-        setLoading(false);
-      } catch (error) {
-        console.error('Erro ao carregar dados:', error);
-        setLoading(false);
-      }
-    };
+  const handleLogin = async (userData) => {
+    // Aqui é o ponto certo para carregar dados - após login bem-sucedido
+    setUser(userData);
+    setLoading(true);
     
-    loadData();
+    try {
+      // Agora é seguro carregar os dados porque temos um usuário autenticado
+      const guardsResult = await getAllSecurityGuards();
+      setSecurityGuards(guardsResult.data);
+      guardsListenerRef.current = guardsResult.unsubscribe;
+      
+      const checkInsResult = await getRealtimeCheckIns(20);
+      setCheckIns(checkInsResult.data);
+      checkInsListenerRef.current = checkInsResult.unsubscribe;
+      
+      const statsData = await getCheckInStats();
+      setStats({
+        totalGuards: guardsResult.data.length,
+        activeGuards: guardsResult.data.filter(guard => 
+          guard.role !== 'admin' && guard.role !== 'rh').length,
+        checkInsToday: statsData.todayCount
+      });
+      
+      navigate('/dashboard');
+    } catch (error) {
+      console.error("Erro ao carregar dados após login:", error);
+      await logout();
+      setUser(null);
+      alert("Erro ao carregar dados: " + error.message);
+    } finally {
+      setLoading(false);
+    }
+  };
 
-    // Limpar listeners ao desmontar
-    return () => {
+  const handleLogout = async () => {
+    try {
       if (guardsListenerRef.current) {
         guardsListenerRef.current();
       }
       if (checkInsListenerRef.current) {
         checkInsListenerRef.current();
       }
-    };
-  }, []);
-
-  const handleLogin = (userData) => {
-    setUser(userData);
-  };
-
-  const handleLogout = async () => {
-    try {
+      
       await logout();
       setUser(null);
+      setSecurityGuards([]);
+      setCheckIns([]);
+      setStats({});
     } catch (error) {
       console.error('Erro ao fazer logout:', error);
     }
@@ -240,22 +255,20 @@ const AdminApp = () => {
         path="/dashboard" 
         element={
           user ? (
-            <PrivateRoute>
-              <AdminDashboard 
-                user={user} 
-                onLogout={handleLogout} 
-                loading={loading}
-                securityGuards={securityGuards}
-                checkIns={checkIns}
-                stats={stats}
-              />
-            </PrivateRoute>
+            <AdminDashboard 
+              user={user} 
+              onLogout={handleLogout} 
+              loading={loading}
+              securityGuards={securityGuards}
+              checkIns={checkIns}
+              stats={stats}
+            />
           ) : (
             <Navigate to="/login" replace />
           )
         } 
       />
-      <Route path="/" element={<Navigate to="/dashboard" replace />} />
+      <Route path="/" element={<Navigate to={user ? "/dashboard" : "/login"} replace />} />
       <Route path="*" element={<Navigate to="/" replace />} />
     </Routes>
   );
