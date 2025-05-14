@@ -50,9 +50,13 @@ export const formatDateForReport = (date, includeTime = false) => {
   export const addReportHeader = (doc, title, subtitle = '') => {
     const pageWidth = doc.internal.pageSize.getWidth();
     
-    // Logo (simulado com retângulo azul)
-    doc.setFillColor(0, 51, 102); // Azul
-    doc.rect(15, 15, 20, 20, 'F');
+    const logoUrl = 'public/images/logo.png'; // Caminho do logo no servidor
+    try {
+      doc.addImage(logoUrl, 'PNG', 15, 15, 20, 20);
+    } catch (error) {
+      doc.setFillColor(203, 173, 108); 
+      doc.rect(15, 15, 20, 20, 'F');
+    }
     
     // Adicionar título
     doc.setFont('helvetica', 'bold');

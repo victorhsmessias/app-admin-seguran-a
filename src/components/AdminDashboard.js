@@ -1124,7 +1124,7 @@ const AdminDashboard = ({ user, onLogout }) => {
       {/* Conteúdo principal */}
       <main className="flex-1 max-w-7xl w-full mx-auto px-4 sm:px-6 lg:px-8 py-6">
         {/* Navegação por abas */}
-        <div className="mb-6 border-b border-gray-200">
+        <div className="mb-6 border-b border-gray-200 flex items-center justify-between">
           <nav className="-mb-px flex">
             <button
               onClick={() => setActiveTab('overview')}
@@ -1157,6 +1157,12 @@ const AdminDashboard = ({ user, onLogout }) => {
               Relatórios
             </button>
           </nav>
+          <img 
+            src='./images/logo.png'
+            alt="DS Security Suprema" 
+            className="mr-20 h-24 w-auto"
+          />
+          
         </div>
 
         {/* Conteúdo da aba selecionada */}
