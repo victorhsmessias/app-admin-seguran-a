@@ -6,9 +6,10 @@ import { roleMappings } from './roleMappings';
  * @returns {string} Data formatada
  */
 export const formatDateForReport = (date, includeTime = false) => {
-    if (!date) return 'Data inválida';
-    
-    let dateObj;
+  if (!date) return 'Data inválida';
+  
+  let dateObj;
+  try {
     if (date instanceof Date) {
       dateObj = date;
     } else if (typeof date === 'string') {
@@ -39,8 +40,11 @@ export const formatDateForReport = (date, includeTime = false) => {
     }
     
     return new Intl.DateTimeFormat('pt-BR', options).format(dateObj);
-  };
-  
+  } catch (error) {
+    console.error('Erro ao formatar data:', error, date);
+    return 'Data inválida';
+  }
+};
   /**
    * Cria um cabeçalho de relatório com logo
    * @param {object} doc - Instância do jsPDF
@@ -50,10 +54,17 @@ export const formatDateForReport = (date, includeTime = false) => {
   export const addReportHeader = (doc, title, subtitle = '') => {
     const pageWidth = doc.internal.pageSize.getWidth();
     
-    const logoUrl = 'public/images/logo.png'; // Caminho do logo no servidor
+    // Fix: Use correct path to logo - either use base64 or skip if not available
     try {
-      doc.addImage(logoUrl, 'PNG', 15, 15, 20, 20);
+      // Option 1: Use a base64 string of your logo
+      // const logoBase64 = 'data:image/png;base64,...'; // Add your base64 string here
+      // doc.addImage(logoBase64, 'PNG', 15, 15, 20, 20);
+      
+      // Option 2: Just use colored rectangle as fallback
+      doc.setFillColor(203, 173, 108); 
+      doc.rect(15, 15, 20, 20, 'F');
     } catch (error) {
+      console.error('Error adding logo:', error);
       doc.setFillColor(203, 173, 108); 
       doc.rect(15, 15, 20, 20, 'F');
     }

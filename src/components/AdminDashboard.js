@@ -9,6 +9,7 @@ import { onAuthStateChanged } from 'firebase/auth';
 import { auth, db } from '../firebase';
 import { getDoc, doc, collection, query, where, getDocs } from 'firebase/firestore';
 import { roleMappings } from '../utils/roleMappings';
+import { logo64 } from '../assets/logo64';
 
 // Função auxiliar para verificar se o funcionário é operacional (não admin)
 const isOperationalRole = (role) => {
@@ -335,9 +336,13 @@ const AdminDashboard = ({ user, onLogout }) => {
 
     try {      
       // Criar datas para filtragem
-      const startDate = new Date(reportFilter.startDate);
-      startDate.setHours(0, 0, 0, 0);
-      
+      const startParts = reportFilter.startDate.split('-');
+      const startDate = new Date(
+        parseInt(startParts[0]),
+        parseInt(startParts[1]) - 1,
+        parseInt(startParts[2]),
+        0, 0, 0, 0
+      );
       const endDate = new Date(reportFilter.endDate);
       endDate.setHours(23, 59, 59, 999);
       
@@ -483,142 +488,341 @@ const AdminDashboard = ({ user, onLogout }) => {
     
     setIsGeneratingReport(true);
     
-    // Importar jsPDF e plugin autotable de forma dinâmica
-    import('jspdf').then((jsPDFModule) => {
-      import('jspdf-autotable').then(() => {
-        try {
-          const { default: jsPDF } = jsPDFModule;
-          const doc = new jsPDF();
-          
-          // Configurações da página
-          const pageWidth = doc.internal.pageSize.getWidth();
-          const pageHeight = doc.internal.pageSize.getHeight();
-          
-          // Adicionar cabeçalho do relatório
-          const mainTitle = "Sistema de Monitoramento";
-          const subTitle = "Relatório de Check-ins";
-          addReportHeader(doc, mainTitle, subTitle);
-          
-          // Adicionar informações do período
-          doc.setFont('helvetica', 'normal');
-          doc.setFontSize(10);
-          doc.setTextColor(0, 0, 0);
-          
-          let startDateFormatted = reportFilter.startDate ? 
-            formatDateForReport(new Date(reportFilter.startDate)) : 'N/A';
-          let endDateFormatted = reportFilter.endDate ? 
-            formatDateForReport(new Date(reportFilter.endDate)) : 'N/A';
+    // Only import the core jsPDF
+    import('jspdf').then(jsPDFModule => {
+      try {
+        const { default: jsPDF } = jsPDFModule;
+        
+        // Create the document
+        const doc = new jsPDF();
+        
+        // Page constants
+        const pageWidth = doc.internal.pageSize.getWidth();
+        const pageHeight = doc.internal.pageSize.getHeight();
+        const margin = 15;
+        const usableWidth = pageWidth - (margin * 2);
+        
+        // Simple helper function for date formatting
+        const formatDate = (date) => {
+          if (!date) return 'N/A';
+          try {
+            const d = new Date(date);
+            if (isNaN(d.getTime())) return 'N/A';
+            return `${d.getDate().toString().padStart(2, '0')}/${(d.getMonth() + 1).toString().padStart(2, '0')}/${d.getFullYear()}`;
+          } catch (e) {
+            return 'N/A';
+          }
+        };
+        
+        // Function to add report header to a page
+        const addHeaderToPage = (title, subtitle) => {
+          try {
+           
+            const logoBase64 = logo64;
             
-          const periodoTexto = `Período: ${startDateFormatted} a ${endDateFormatted}`;
-          doc.text(periodoTexto, 15, 50);
-          
-          // Posição Y atual para adicionar elementos
-          let yPos = 60;
-          
-          // Adicionar dados do funcionário se filtrado por um específico
-          if (reportFilter.securityId) {
-            const funcionario = securityGuards.find(g => g.id === reportFilter.securityId);
-            if (funcionario) {
-              // Passar o objeto roleMappings como parâmetro adicional
-              yPos = addEmployeeInfo(doc, funcionario, yPos, roleMappings);
+            if (logoBase64) {
+              // If logo base64 is provided, use it
+              doc.addImage(logoBase64, 'PNG', margin, 15, 20, 20);
+            } else {
+              // Fallback to colored rectangle
+              doc.setFillColor(203, 173, 108); 
+              doc.rect(margin, 15, 20, 20, 'F');
             }
-          } else {
-            // Relatório geral - adicione um título
-            doc.setFont('helvetica', 'bold');
-            doc.setFontSize(11);
-            doc.setTextColor(0, 51, 102);
-            doc.text("Relatório Geral - Todos os Funcionários", 15, yPos);
-            yPos += 10;
+          } catch (error) {
+            // Fallback if image loading fails
+            console.error('Error loading logo:', error);
+            doc.setFillColor(203, 173, 108); 
+            doc.rect(margin, 15, 20, 20, 'F');
           }
           
-          // Preparar dados para a tabela
-          const tableData = reportData.map(item => {
-            const date = new Date(item.timestamp);
-            return [
-              item.username || 'Não identificado',
-              formatDateForReport(date, false),
-              date.toLocaleTimeString('pt-BR', {hour: '2-digit', minute:'2-digit'}),
-              item.address || 'Endereço não disponível',
-              item.deviceInfo ? (item.deviceInfo.length > 25 ? 
-                item.deviceInfo.substring(0, 22) + '...' : item.deviceInfo) : 'N/A'
-            ];
+          // Title
+          doc.setFont('helvetica', 'bold');
+          doc.setFontSize(16);
+          doc.setTextColor(0, 51, 102);
+          doc.text(title, margin + 25, 25);
+          
+          // Subtitle
+          doc.setFontSize(12);
+          doc.setFont('helvetica', 'normal');
+          doc.setTextColor(102, 102, 102);
+          doc.text(subtitle, margin + 25, 32);
+          
+          // Separator line
+          doc.setDrawColor(200, 200, 200);
+          doc.setLineWidth(0.5);
+          doc.line(margin, 40, pageWidth - margin, 40);
+          
+          return 45; // Return Y position after header
+        };
+        
+        // Function to add employee info - FURTHER REDUCED HEIGHT
+        const addEmployeeInfo = (employee, startY) => {
+          // Create border and background for employee section
+          doc.setDrawColor(220, 220, 220);
+          doc.setFillColor(245, 245, 245);
+          doc.setLineWidth(0.3);
+          doc.roundedRect(margin, startY, usableWidth, 20, 3, 3, 'FD'); // Further reduced height from 25 to 20
+          
+          // Set up for two columns
+          const col1 = margin + 5;
+          const col2 = margin + (usableWidth / 2);
+          
+          // ALL INFO ON ONE LINE - more compact
+          doc.setFontSize(8); // Smaller font
+          doc.setTextColor(0, 0, 0);
+          
+          // First row with bold labels and normal text values
+          doc.setFont('helvetica', 'bold');
+          doc.text("Nome:", col1, startY + 7);
+          doc.text("Telefone:", col2, startY + 7);
+          
+          doc.setFont('helvetica', 'normal');
+          doc.text(employee.username || 'Não informado', col1 + 15, startY + 7);
+          doc.text(employee.phone || 'Não informado', col2 + 20, startY + 7);
+          
+          // Second row
+          doc.setFont('helvetica', 'bold');
+          doc.text("Email:", col1, startY + 14);
+          doc.text("Função:", col2, startY + 14);
+          
+          // Role name with mapping
+          let roleName = 'Não informado';
+          if (employee.role) {
+            roleName = roleMappings[employee.role]?.text || employee.role;
+          }
+          
+          doc.setFont('helvetica', 'normal');
+          doc.text(employee.email || 'Não informado', col1 + 15, startY + 14);
+          doc.text(roleName, col2 + 20, startY + 14);
+          
+          return startY + 22; // Return Y position after employee section (reduced from 30)
+        };
+        
+        // Function to add table headers - WITH MORE DESCRIPTIVE LABELS
+        const addTableHeaders = (startY) => {
+          // Define column info with more descriptive headers
+          const headers = ['Nome do Funcionário', 'Data do Check-in', 'Hora', 'Endereço de Localização'];
+          const colWidths = [40, 30, 30, 85]; // Kept the same widths
+          
+          // Draw header cells
+          let currentX = margin;
+          doc.setFillColor(0, 51, 102);
+          doc.setTextColor(255, 255, 255);
+          doc.setFont('helvetica', 'bold');
+          doc.setFontSize(9);
+          
+          headers.forEach((header, i) => {
+            // Header cell background
+            doc.rect(currentX, startY, colWidths[i], 8, 'F');
+            
+            // Header text
+            doc.text(header, currentX + (colWidths[i]/2), startY + 5, {
+              align: 'center'
+            });
+            
+            currentX += colWidths[i];
           });
           
-          // Definir cabeçalhos da tabela
-          const headers = [
-            'Funcionário', 
-            'Data', 
-            'Hora', 
-            'Localização',
-            'Dispositivo'
-          ];
-          
-          // Estilo personalizado para a tabela
-          const tableStyles = {
-            startY: yPos,
-            styles: { 
-              fontSize: 9,
-              cellPadding: 3
-            },
-            headStyles: { 
-              fillColor: [0, 51, 102],
-              textColor: 255,
-              fontStyle: 'bold'
-            },
-            alternateRowStyles: { 
-              fillColor: [245, 245, 245] 
-            },
-            columnStyles: {
-              0: { fontStyle: 'bold' },
-              3: { cellWidth: 'auto' }
-            },
-            // Ativar quebra de texto para colunas de texto longo
-            columnStyles: {
-              3: { cellWidth: 'auto' },
-              4: { cellWidth: 30 }
-            },
-            // Garantir que a tabela seja completamente visível
-            margin: { top: 10, right: 15, bottom: 10, left: 15 }
+          return {
+            yPos: startY + 8,
+            headers,
+            colWidths
           };
+        };
+        
+        // Function to add a data row to the table - kept the same
+        const addTableRow = (item, rowIndex, startY, colWidths) => {
+          // Set row background color (alternating)
+          if (rowIndex % 2 === 0) {
+            doc.setFillColor(245, 245, 245);
+          } else {
+            doc.setFillColor(255, 255, 255);
+          }
           
-          // Gerar a tabela
-          doc.autoTable({
-            head: [headers],
-            body: tableData,
-            ...tableStyles,
-            didDrawPage: function(data) {
-              // Aqui você pode adicionar cabeçalhos e rodapés de página
-              // O cabeçalho só será adicionado a partir da segunda página
-              if (data.pageNumber > 1) {
-                addReportHeader(doc, mainTitle, subTitle);
+          // Row height
+          const rowHeight = 7;
+          
+          // Draw row background
+          doc.rect(margin, startY, colWidths.reduce((a, b) => a + b, 0), rowHeight, 'F');
+          
+          // Format date and time
+          let dateStr = 'N/A';
+          let timeStr = 'N/A';
+          
+          try {
+            if (item.timestamp) {
+              const date = new Date(item.timestamp);
+              if (!isNaN(date.getTime())) {
+                dateStr = formatDate(date);
+                timeStr = `${date.getHours().toString().padStart(2, '0')}:${date.getMinutes().toString().padStart(2, '0')}`;
               }
             }
-          });
+          } catch (e) { 
+            // Keep fallback values
+          }
           
-          // Adicionar informações no final
-          const finalPageY = doc.lastAutoTable.finalY + 10;
-          doc.setFontSize(10);
+          // Set text properties
+          doc.setTextColor(0, 0, 0);
+          doc.setFont('helvetica', 'normal');
+          doc.setFontSize(8);
+          
+          // Add cell data
+          let currentX = margin;
+          
+          // Username/Funcionário (with bold style)
           doc.setFont('helvetica', 'bold');
-          doc.text(`Total de registros: ${reportData.length}`, 15, finalPageY);
+          doc.text(item.username || 'Não identificado', currentX + 2, startY + 4.5);
+          currentX += colWidths[0];
           
-          // Adicionar rodapé em todas as páginas
-          addDocumentFooter(doc);
+          // Return to normal font weight
+          doc.setFont('helvetica', 'normal');
           
-          // Nome do arquivo para download
-          const fileName = reportFilter.securityId 
-            ? `relatorio_${securityGuards.find(g => g.id === reportFilter.securityId)?.username 
-                || 'funcionario'}_${reportFilter.startDate}_a_${reportFilter.endDate}.pdf`
-            : `relatorio_todos_${reportFilter.startDate}_a_${reportFilter.endDate}.pdf`;
+          // Date
+          doc.text(dateStr, currentX + 2, startY + 4.5);
+          currentX += colWidths[1];
           
-          // Salvar o PDF
-          doc.save(fileName);
-        } catch (error) {
-          console.error('Erro ao gerar PDF:', error);
-          alert('Ocorreu um erro ao gerar o PDF. Tente novamente.');
-        } finally {
-          setIsGeneratingReport(false);
+          // Time
+          doc.text(timeStr, currentX + 2, startY + 4.5);
+          currentX += colWidths[2];
+          
+          // Location - truncate if too long
+          const address = item.address || 'Endereço não disponível';
+          const maxChars = 50;
+          const displayAddress = address.length > maxChars ? address.substring(0, maxChars) + '...' : address;
+          doc.text(displayAddress, currentX + 2, startY + 4.5);
+          
+          return startY + rowHeight;
+        };
+        
+        // Function to add footer to all pages - kept the same
+        const addFooterToAllPages = () => {
+          const pageCount = doc.internal.getNumberOfPages();
+          
+          for (let i = 1; i <= pageCount; i++) {
+            doc.setPage(i);
+            
+            // Add footer line
+            doc.setDrawColor(200, 200, 200);
+            doc.setLineWidth(0.5);
+            doc.line(margin, pageHeight - 20, pageWidth - margin, pageHeight - 20);
+            
+            // Add footer text
+            doc.setFont('helvetica', 'normal');
+            doc.setFontSize(8);
+            doc.setTextColor(128, 128, 128);
+            
+            // Current date
+            const today = new Date();
+            const dateText = formatDate(today);
+            const timeText = `${today.getHours().toString().padStart(2, '0')}:${today.getMinutes().toString().padStart(2, '0')}`;
+            
+            doc.text(`Relatório gerado em: ${dateText} às ${timeText}`, margin, pageHeight - 12);
+            
+            // Page numbers
+            doc.text(`Página ${i} de ${pageCount}`, pageWidth - margin, pageHeight - 12, {
+              align: 'right'
+            });
+          }
+        };
+        
+        // START BUILDING THE PDF
+        
+        // Add main header to first page
+        let yPos = addHeaderToPage("Sistema de Monitoramento", "Relatório de Check-ins");
+        
+        // Add period information
+        doc.setFont('helvetica', 'normal');
+        doc.setFontSize(10);
+        doc.setTextColor(0, 0, 0);
+        
+        const startDate = formatDate(reportFilter.startDate);
+        const endDate = formatDate(reportFilter.endDate);
+        doc.text(`Período: ${startDate} a ${endDate}`, margin, yPos);
+        yPos += 8; // Reduced from 10
+        
+        // Add employee info if filtered by employee
+        if (reportFilter.securityId) {
+          const employee = securityGuards.find(g => g.id === reportFilter.securityId);
+          if (employee) {
+            yPos = addEmployeeInfo(employee, yPos);
+          }
+        } else {
+          // General report title
+          doc.setFont('helvetica', 'bold');
+          doc.setFontSize(11);
+          doc.setTextColor(0, 51, 102);
+          doc.text("Relatório Geral - Todos os Funcionários", margin, yPos);
+          yPos += 8; // Reduced from 10
         }
-      });
+        
+        // Add table headers
+        const tableInfo = addTableHeaders(yPos);
+        yPos = tableInfo.yPos;
+        
+        // Constants for pagination
+        const rowHeight = 7;
+        const headerHeight = 30; // Space needed for page header
+        const footerHeight = 25; // Space needed for page footer
+        const availableHeight = pageHeight - headerHeight - footerHeight;
+        const maxRowsPerPage = Math.floor(availableHeight / rowHeight);
+        
+        // Add table rows with pagination
+        reportData.forEach((item, index) => {
+          // Check if we need a new page
+          if (index > 0 && index % maxRowsPerPage === 0) {
+            // Add a new page
+            doc.addPage();
+            
+            // Add header to new page
+            yPos = addHeaderToPage("Sistema de Monitoramento", "Continuação do Relatório");
+            
+            // Add new table headers
+            const newTableInfo = addTableHeaders(yPos);
+            yPos = newTableInfo.yPos;
+          }
+          
+          // Add this row
+          yPos = addTableRow(item, index, yPos, tableInfo.colWidths);
+        });
+        
+        // Add total records count
+        yPos += 5;
+        doc.setFont('helvetica', 'bold');
+        doc.setFontSize(10);
+        doc.setTextColor(0, 0, 0);
+        doc.text(`Total de registros: ${reportData.length}`, margin, yPos);
+        
+        // Add footer to all pages
+        addFooterToAllPages();
+        
+        // Generate filename
+        let fileName = 'relatorio_check_ins.pdf';
+        
+        try {
+          if (reportFilter.securityId) {
+            const guard = securityGuards.find(g => g.id === reportFilter.securityId);
+            const guardName = guard?.username?.replace(/[^a-zA-Z0-9]/g, '_') || 'funcionario';
+            fileName = `relatorio_${guardName}_${reportFilter.startDate || 'inicio'}_a_${reportFilter.endDate || 'fim'}.pdf`;
+          } else {
+            fileName = `relatorio_todos_${reportFilter.startDate || 'inicio'}_a_${reportFilter.endDate || 'fim'}.pdf`;
+          }
+        } catch (e) {
+          console.error('Erro ao gerar nome do arquivo:', e);
+        }
+        
+        // Save the document
+        doc.save(fileName);
+        
+      } catch (error) {
+        console.error('Erro ao gerar PDF:', error);
+        alert('Ocorreu um erro ao gerar o PDF: ' + (error.message || 'Erro desconhecido'));
+      } finally {
+        setIsGeneratingReport(false);
+      }
+    }).catch(importError => {
+      console.error('Erro ao importar jsPDF:', importError);
+      alert('Não foi possível carregar a biblioteca PDF. Verifique sua conexão.');
+      setIsGeneratingReport(false);
     });
   };
 
