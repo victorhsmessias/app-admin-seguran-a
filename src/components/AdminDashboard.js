@@ -335,18 +335,12 @@ const AdminDashboard = ({ user, onLogout }) => {
     setError(null);
 
     try {      
-      // Criar datas para filtragem
-      const startParts = reportFilter.startDate.split('-');
-      const startDate = new Date(
-        parseInt(startParts[0]),
-        parseInt(startParts[1]) - 1,
-        parseInt(startParts[2]),
-        0, 0, 0, 0
-      );
-      const endDate = new Date(reportFilter.endDate);
-      endDate.setHours(23, 59, 59, 999);
+      const startDateParts = reportFilter.startDate.split('-').map(part => parseInt(part, 10));
+      const startDate = new Date(startDateParts[0], startDateParts[1] - 1, startDateParts[2], 0, 0, 0);
       
-      // Construir query base - Usando o nome correto da coleção "checkIns"
+      const endDateParts = reportFilter.endDate.split('-').map(part => parseInt(part, 10));
+      const endDate = new Date(endDateParts[0], endDateParts[1] - 1, endDateParts[2], 23, 59, 59, 999);
+            
       let q;
       
       if (reportFilter.securityId) {
@@ -373,10 +367,10 @@ const AdminDashboard = ({ user, onLogout }) => {
           } else if (data.timestamp && typeof data.timestamp !== 'object') {
             checkInDate = new Date(data.timestamp);
           } else {
-            checkInDate = new Date(); // Fallback para data atual
+            return; // Pular item sem data válida
           }
           
-          // Filtrar por data
+          // Verificar se está dentro do intervalo de datas (inclusivo)
           if (checkInDate >= startDate && checkInDate <= endDate) {
             // Validar e processar URL da imagem
             let photoUrl = data.photoUrl;
@@ -388,14 +382,12 @@ const AdminDashboard = ({ user, onLogout }) => {
               photoUrl = null;
             }
             
-            // Garantir que a localização existe
             const location = data.location || { 
               latitude: 0, 
               longitude: 0, 
               accuracy: 0 
             };
             
-            // Adicionar à lista de resultados
             results.push({
               id: doc.id,
               userId: data.userId || '',
@@ -413,12 +405,10 @@ const AdminDashboard = ({ user, onLogout }) => {
         }
       });
       
-      // Ordenar por data (mais recente primeiro)
-      results.sort((a, b) => b.timestamp - a.timestamp);      
-      // Atualizar estado
+      results.sort((a, b) => b.timestamp - a.timestamp);
+
       setReportData(results);
       
-      // Buscar endereços para cada check-in
       results.forEach(async (item, index) => {
         try {
           if (item.location && item.location.latitude && item.location.longitude) {
@@ -427,7 +417,6 @@ const AdminDashboard = ({ user, onLogout }) => {
               item.location.longitude
             );
             
-            // Atualizar apenas o item específico com o endereço
             setReportData(current => {
               const updated = [...current];
               updated[index] = {...updated[index], address};
@@ -476,6 +465,34 @@ const AdminDashboard = ({ user, onLogout }) => {
     } catch (error) {
       console.error('Erro ao obter endereço:', error);
       return `Coordenadas: ${latitude.toFixed(6)}, ${longitude.toFixed(6)}`;
+    }
+  };
+
+  // Correção específica para a exibição do período no PDF
+  // Substitua o trecho correspondente na função handleExportPDF
+
+  // Função auxiliar para formatar data do filtro corretamente
+  const formatFilterDate = (dateString) => {
+    if (!dateString) return 'N/A';
+    
+    try {
+      // Trata especificamente strings no formato YYYY-MM-DD (como vêm do input date)
+      const parts = dateString.split('-');
+      if (parts.length === 3) {
+        // Formato brasileiro (DD/MM/YYYY) - independente de fuso horário
+        return `${parts[2]}/${parts[1]}/${parts[0]}`;
+      }
+      
+      // Fallback para outros formatos
+      const date = new Date(dateString);
+      if (!isNaN(date.getTime())) {
+        return `${date.getDate().toString().padStart(2, '0')}/${(date.getMonth() + 1).toString().padStart(2, '0')}/${date.getFullYear()}`;
+      }
+      
+      return dateString; // Se não conseguir formatar, retorna a string original
+    } catch (e) {
+      console.error('Erro ao formatar data do filtro:', e);
+      return dateString;
     }
   };
 
@@ -724,10 +741,6 @@ const AdminDashboard = ({ user, onLogout }) => {
             });
           }
         };
-        
-        // START BUILDING THE PDF
-        
-        // Add main header to first page
         let yPos = addHeaderToPage("Sistema de Monitoramento", "Relatório de Check-ins");
         
         // Add period information
@@ -735,8 +748,8 @@ const AdminDashboard = ({ user, onLogout }) => {
         doc.setFontSize(10);
         doc.setTextColor(0, 0, 0);
         
-        const startDate = formatDate(reportFilter.startDate);
-        const endDate = formatDate(reportFilter.endDate);
+        const startDate = formatFilterDate(reportFilter.startDate);
+        const endDate = formatFilterDate(reportFilter.endDate);
         doc.text(`Período: ${startDate} a ${endDate}`, margin, yPos);
         yPos += 8; // Reduced from 10
         
