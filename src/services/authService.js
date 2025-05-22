@@ -26,11 +26,9 @@ export const getUserRole = async (userId) => {
     if (userDoc.exists()) {
       return userDoc.data().role || 'user'; // 'user' como fallback padrão
     } else {
-      console.log("Usuário não encontrado no Firestore");
       return 'user'; // Papel padrão
     }
   } catch (error) {
-    console.log("Erro ao buscar papel do usuário:", error);
     return 'user'; // Papel padrão em caso de erro
   }
 };

@@ -2,7 +2,7 @@ import React, { useState, useEffect, useRef } from 'react';
 import { getAvatarUrl, getThumbnailUrl, getModalViewUrl } from '../utils/imageUtils';
 import { getCurrentUser, logout } from '../services/authService';
 import { formatDateForReport, addReportHeader, addEmployeeInfo, addDocumentFooter } from '../utils/pdfUtils';
-import { getAllSecurityGuards, createSecurityGuard, updateSecurityGuard, deleteSecurityGuard } from '../services/securityService';
+import { getAllSecurityGuards, createSecurityGuard, updateSecurityGuard, deleteSecurityGuard, blockEmployee, unblockEmployee } from '../services/securityService';
 import { getRealtimeCheckIns, getCheckInsByDateRange, getCheckInStats } from '../services/checkInService';
 import { useNavigate } from 'react-router-dom';
 import { onAuthStateChanged } from 'firebase/auth';
@@ -80,6 +80,110 @@ const AdminDashboard = ({ user, onLogout }) => {
   const handleLogoutClick = async () => {
     navigate('/login');
     await onLogout();
+  };
+
+  //Função para forçar sincronização com o servidor
+  const forceSyncWithServer = async () => {
+    try {
+      setLoading(true);
+      
+      // Cancelar listeners existentes
+      if (guardsListenerRef.current) {
+        guardsListenerRef.current();
+      }
+      
+      // Recriar listener
+      const guardsResult = await getAllSecurityGuards();
+      setSecurityGuards(guardsResult.data);
+      guardsListenerRef.current = guardsResult.unsubscribe;
+      
+    } catch (error) {
+      console.error('Erro na sincronização:', error);
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  // Função auxiliar para recarregar dados de um funcionário específico
+  const reloadEmployeeData = async (employeeId) => {
+    try {
+      const employeeDoc = await getDoc(doc(db, 'users', employeeId), { source: 'server' }); // Forçar busca no servidor
+      if (employeeDoc.exists()) {
+        const updatedEmployee = { id: employeeDoc.id, ...employeeDoc.data() };
+        
+        // Atualizar o estado local
+        setSecurityGuards(prev => 
+          prev.map(guard => 
+            guard.id === employeeId ? updatedEmployee : guard
+          )
+        );
+        
+        return updatedEmployee;
+      }
+    } catch (error) {
+      console.error('Erro ao recarregar dados do funcionário:', error);
+    }
+  };
+
+  // Função para bloquear funcionário
+  const handleBlockEmployee = async (employeeId, employeeName) => {
+    const reason = prompt(`Por que deseja bloquear ${employeeName}?`, 'Bloqueado pelo administrador');
+    
+    if (reason === null) return; // Usuário cancelou
+    
+    if (!window.confirm(`Tem certeza que deseja bloquear ${employeeName}?`)) {
+      return;
+    }
+    
+    try {
+      setIsSubmitting(true);
+      
+      await blockEmployee(employeeId, reason);
+      
+      // Aguardar um pouco para garantir que os dados foram salvos
+      await new Promise(resolve => setTimeout(resolve, 1000));
+      
+      // CORREÇÃO: Recarregar dados do funcionário do servidor
+      await reloadEmployeeData(employeeId);
+      
+      alert(`${employeeName} foi bloqueado com sucesso!`);
+      
+    } catch (error) {
+      console.error('Erro ao bloquear funcionário:', error);
+      alert('Erro ao bloquear funcionário: ' + error.message);
+    } finally {
+      setIsSubmitting(false);
+    }
+  };
+
+  // Função para desbloquear funcionário
+  const handleUnblockEmployee = async (employeeId, employeeName) => {
+    if (!window.confirm(`Tem certeza que deseja desbloquear ${employeeName}?`)) {
+      return;
+    }
+    
+    try {
+      setIsSubmitting(true);
+      
+      await unblockEmployee(employeeId);
+      
+      // Aguardar um pouco para garantir que os dados foram salvos
+      await new Promise(resolve => setTimeout(resolve, 1000));
+      
+      // CORREÇÃO: Recarregar dados do funcionário do servidor
+      await reloadEmployeeData(employeeId);
+      
+      alert(`${employeeName} foi desbloqueado com sucesso!`);
+      
+    } catch (error) {
+      console.error('Erro ao desbloquear funcionário:', error);
+      alert('Erro ao desbloquear funcionário: ' + error.message);
+      
+      // Em caso de erro, tentar recarregar os dados para sincronizar
+      await reloadEmployeeData(employeeId);
+    } finally {
+      setIsSubmitting(false);
+    }
   };
 
   // Carregar dados ao montar o componente
@@ -468,9 +572,6 @@ const AdminDashboard = ({ user, onLogout }) => {
     }
   };
 
-  // Correção específica para a exibição do período no PDF
-  // Substitua o trecho correspondente na função handleExportPDF
-
   // Função auxiliar para formatar data do filtro corretamente
   const formatFilterDate = (dateString) => {
     if (!dateString) return 'N/A';
@@ -852,26 +953,46 @@ const AdminDashboard = ({ user, onLogout }) => {
       );
     }
 
+    // Calcular estatísticas com base nos dados dos funcionários
+    const totalEmployees = securityGuards.length;
+    const activeEmployees = securityGuards.filter(guard => 
+      guard.status !== 'blocked' && isOperationalRole(guard.role)
+    ).length;
+    const blockedEmployees = securityGuards.filter(guard => 
+      guard.status === 'blocked'
+    ).length;
+
     return (
       <div>
-        {/* Cartões de estatísticas */}
-        <div className="grid grid-cols-1 gap-5 sm:grid-cols-3 mb-6">
+        {/* Cartões de estatísticas atualizados */}
+        <div className="grid grid-cols-1 gap-5 sm:grid-cols-2 lg:grid-cols-4 mb-6">
           <div className="bg-white overflow-hidden shadow rounded-lg">
             <div className="px-4 py-5 sm:p-6">
               <dl>
                 <dt className="text-sm font-medium text-gray-500 truncate">Total de Funcionários</dt>
-                <dd className="mt-1 text-3xl font-semibold text-gray-900">{stats.totalGuards}</dd>
+                <dd className="mt-1 text-3xl font-semibold text-gray-900">{totalEmployees}</dd>
               </dl>
             </div>
           </div>
+          
           <div className="bg-white overflow-hidden shadow rounded-lg">
             <div className="px-4 py-5 sm:p-6">
               <dl>
-                <dt className="text-sm font-medium text-gray-500 truncate">Funcionários Operacionais</dt>
-                <dd className="mt-1 text-3xl font-semibold text-green-600">{stats.activeGuards}</dd>
+                <dt className="text-sm font-medium text-gray-500 truncate">Funcionários Ativos</dt>
+                <dd className="mt-1 text-3xl font-semibold text-green-600">{activeEmployees}</dd>
               </dl>
             </div>
           </div>
+          
+          <div className="bg-white overflow-hidden shadow rounded-lg">
+            <div className="px-4 py-5 sm:p-6">
+              <dl>
+                <dt className="text-sm font-medium text-gray-500 truncate">Funcionários Bloqueados</dt>
+                <dd className="mt-1 text-3xl font-semibold text-red-600">{blockedEmployees}</dd>
+              </dl>
+            </div>
+          </div>
+          
           <div className="bg-white overflow-hidden shadow rounded-lg">
             <div className="px-4 py-5 sm:p-6">
               <dl>
@@ -880,9 +1001,9 @@ const AdminDashboard = ({ user, onLogout }) => {
               </dl>
             </div>
           </div>
-        </div>
+        </div>      
 
-        {/* Tabela de check-ins recentes */}
+        {/* Resto do código da tabela de check-ins permanece igual... */}
         <div className="bg-white shadow rounded-lg overflow-hidden">
           <div className="px-4 py-5 border-b border-gray-200 sm:px-6">
             <h3 className="text-lg leading-6 font-medium text-gray-900">Últimos Check-ins</h3>
@@ -1007,6 +1128,9 @@ const AdminDashboard = ({ user, onLogout }) => {
                 <th scope="col" className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
                   Função
                 </th>
+                <th scope="col" className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
+                  Status
+                </th>
                 <th scope="col" className="px-6 py-3 text-right text-xs font-medium text-gray-500 uppercase tracking-wider">
                   Ações
                 </th>
@@ -1014,45 +1138,98 @@ const AdminDashboard = ({ user, onLogout }) => {
             </thead>
             <tbody className="bg-white divide-y divide-gray-200">
               {securityGuards.length > 0 ? (
-                securityGuards.map((guard) => (
-                  <tr key={guard.id} className="hover:bg-gray-50">
-                    <td className="px-6 py-4 whitespace-nowrap">
-                      <div className="flex items-center">
-                        <div className="ml-4">
-                          <div className="text-sm font-medium text-gray-900">{guard.username}</div>
+                securityGuards.map((guard) => {
+                  const isBlocked = guard.status === 'blocked';
+                  const isOperational = isOperationalRole(guard.role);
+                  
+                  return (
+                    <tr key={guard.id} className={`hover:bg-gray-50 ${isBlocked ? 'bg-red-50' : ''}`}>
+                      <td className="px-6 py-4 whitespace-nowrap">
+                        <div className="flex items-center">
+                          <div className="ml-4">
+                            <div className={`text-sm font-medium ${isBlocked ? 'text-red-900' : 'text-gray-900'}`}>
+                              {guard.username}
+                            </div>
+                            {isBlocked && guard.blockReason && (
+                              <div className="text-xs text-red-600 mt-1">
+                                Motivo: {guard.blockReason}
+                              </div>
+                            )}
+                          </div>
                         </div>
-                      </div>
-                    </td>
-                    <td className="px-6 py-4 whitespace-nowrap">
-                      <div className="text-sm text-gray-900">{guard.email}</div>
-                      <div className="text-sm text-gray-500">{guard.phone}</div>
-                    </td>
-                    <td className="px-6 py-4 whitespace-nowrap">
-                      <span className={`px-2 inline-flex text-xs leading-5 font-semibold rounded-full ${
-                        roleMappings[guard.role]?.bgColor || 'bg-gray-100'} ${roleMappings[guard.role]?.textColor || 'text-gray-800'
-                      }`}>
-                        {roleMappings[guard.role]?.text || guard.role}
-                      </span>
-                    </td>
-                    <td className="px-6 py-4 whitespace-nowrap text-right text-sm font-medium">
-                      <button
-                        onClick={() => handleOpenEditModal(guard)}
-                        className="text-indigo-600 hover:text-indigo-900 mr-4"
-                      >
-                        Editar
-                      </button>
-                      <button
-                        onClick={() => handleDeleteGuard(guard.id)}
-                        className="text-red-600 hover:text-red-900"
-                      >
-                        Excluir
-                      </button>
-                    </td>
-                  </tr>
-                ))
+                      </td>
+                      <td className="px-6 py-4 whitespace-nowrap">
+                        <div className={`text-sm ${isBlocked ? 'text-red-700' : 'text-gray-900'}`}>
+                          {guard.email}
+                        </div>
+                        <div className={`text-sm ${isBlocked ? 'text-red-500' : 'text-gray-500'}`}>
+                          {guard.phone}
+                        </div>
+                      </td>
+                      <td className="px-6 py-4 whitespace-nowrap">
+                        <span className={`px-2 inline-flex text-xs leading-5 font-semibold rounded-full ${
+                          roleMappings[guard.role]?.bgColor || 'bg-gray-100'} ${roleMappings[guard.role]?.textColor || 'text-gray-800'
+                        }`}>
+                          {roleMappings[guard.role]?.text || guard.role}
+                        </span>
+                      </td>
+                      <td className="px-6 py-4 whitespace-nowrap">
+                        <span className={`px-2 inline-flex text-xs leading-5 font-semibold rounded-full ${
+                          isBlocked 
+                            ? 'bg-red-100 text-red-800' 
+                            : 'bg-green-100 text-green-800'
+                        }`}>
+                          {isBlocked ? 'Bloqueado' : 'Ativo'}
+                        </span>
+                      </td>
+                      <td className="px-6 py-4 whitespace-nowrap text-right text-sm font-medium">
+                        <div className="flex items-center justify-end space-x-2">
+                          {/* Só mostrar botões de bloquear/desbloquear para funcionários operacionais */}
+                          {isOperational && (
+                            <>
+                              {isBlocked ? (
+                                <button
+                                  onClick={() => handleUnblockEmployee(guard.id, guard.username)}
+                                  className="text-green-600 hover:text-green-900"
+                                  disabled={isSubmitting}
+                                  title="Desbloquear funcionário"
+                                >
+                                  Desbloquear
+                                </button>
+                              ) : (
+                                <button
+                                  onClick={() => handleBlockEmployee(guard.id, guard.username)}
+                                  className="text-orange-600 hover:text-orange-900"
+                                  disabled={isSubmitting}
+                                  title="Bloquear funcionário"
+                                >
+                                  Bloquear
+                                </button>
+                              )}
+                            </>
+                          )}
+                          <button
+                            onClick={() => handleOpenEditModal(guard)}
+                            className="text-indigo-600 hover:text-indigo-900"
+                            disabled={isSubmitting}
+                          >
+                            Editar
+                          </button>                       
+                          <button
+                            onClick={() => handleDeleteGuard(guard.id)}
+                            className="text-red-600 hover:text-red-900"
+                            disabled={isSubmitting}
+                          >
+                            Excluir
+                          </button>
+                        </div>
+                      </td>
+                    </tr>
+                  );
+                })
               ) : (
                 <tr>
-                  <td colSpan="4" className="px-6 py-4 text-center text-sm text-gray-500">
+                  <td colSpan="5" className="px-6 py-4 text-center text-sm text-gray-500">
                     Nenhum funcionário cadastrado
                   </td>
                 </tr>
