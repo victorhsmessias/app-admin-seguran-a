@@ -1242,41 +1242,26 @@ const AdminDashboard = ({ user, onLogout }) => {
               </tr>
             </thead>
             <tbody className="bg-white divide-y divide-gray-200">
-              {securityGuards.length > 0 ? (
-                securityGuards.map((guard) => {
-                  const isBlocked = guard.status === 'blocked';
-                  const isOperational = isOperationalRole(guard.role);
-                  
-                  return (
-                    <tr key={guard.id} className={`hover:bg-gray-50 ${isBlocked ? 'bg-red-50' : ''}`}>
-                      <td className="px-6 py-4 whitespace-nowrap">
-                        <div className="flex items-center">
-                          <div className="ml-4">
-                            <div className={`text-sm font-medium ${isBlocked ? 'text-red-900' : 'text-gray-900'}`}>
-                              {guard.username}
-                            </div>
-                            {isBlocked && guard.blockReason && (
-                              <div className="text-xs text-red-600 mt-1">
-                                Motivo: {guard.blockReason}
-                              </div>
-                            )}
-                          </div>
+               {securityGuards.length > 0 ? (
+                securityGuards.map((guard) => (
+                  <tr key={guard.id} className="hover:bg-gray-50">
+                    <td className="px-6 py-4 whitespace-nowrap">
+                      <div className="flex items-center">
+                        <div className="ml-4">
+                          <div className="text-sm font-medium text-gray-900">{guard.username}</div>
                         </div>
-                      </td>
-                      <td className="px-6 py-4 whitespace-nowrap">
-                        <div className={`text-sm ${isBlocked ? 'text-red-700' : 'text-gray-900'}`}>
-                          {guard.email}
-                        </div>
-                        <div className={`text-sm ${isBlocked ? 'text-red-500' : 'text-gray-500'}`}>
-                          {guard.phone}
-                        </div>
-                      </td>
-                      <td className="px-6 py-4 whitespace-nowrap">
-                        <span className={`px-2 inline-flex text-xs leading-5 font-semibold rounded-full ${
-                          roleMappings[guard.role]?.bgColor || 'bg-gray-100'} ${roleMappings[guard.role]?.textColor || 'text-gray-800'
-                        }`}>
-                          {roleMappings[guard.role]?.text || guard.role}
-                        </span>
+                      </div>
+                    </td>
+                    <td className="px-6 py-4 whitespace-nowrap">
+                      <div className="text-sm text-gray-900">{guard.email}</div>
+                      <div className="text-sm text-gray-500">{guard.phone}</div>
+                    </td>
+                    <td className="px-6 py-4 whitespace-nowrap">
+                      <span className={`px-2 inline-flex text-xs leading-5 font-semibold rounded-full ${
+                        roleMappings[guard.role]?.bgColor || 'bg-gray-100'} ${roleMappings[guard.role]?.textColor || 'text-gray-800'
+                      }`}>
+                        {roleMappings[guard.role]?.text || guard.role}
+                      </span>
                       </td>
                       <td className="px-6 py-4 whitespace-nowrap">
                         <span className={`px-2 inline-flex text-xs leading-5 font-semibold rounded-full ${
