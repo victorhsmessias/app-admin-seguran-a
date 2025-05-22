@@ -545,63 +545,6 @@ const AdminDashboard = ({ user, onLogout }) => {
 
   // Função para obter endereço a partir de coordenadas
   const getAddressFromCoordinates = async (latitude, longitude) => {
-    // 1. Tentar com Nominatim primeiro (gratuito e confiável)
-    try {
-      const nominatimUrl = `https://nominatim.openstreetmap.org/reverse?format=json&lat=${latitude}&lon=${longitude}&zoom=18&addressdetails=1&accept-language=pt-BR`;
-      
-      const response = await fetch(nominatimUrl, {
-        headers: {
-          'User-Agent': 'DS-Security-System/1.0'
-        }
-      });
-      
-      if (response.ok) {
-        const data = await response.json();
-        
-        if (data && data.address) {
-          const addr = data.address;
-          const parts = [];
-          
-          // Extrair componentes do endereço em ordem de especificidade
-          if (addr.road || addr.street) parts.push(addr.road || addr.street);
-          if (addr.house_number) parts.push(`nº ${addr.house_number}`);
-          
-          // Adicionar detalhes do local se disponíveis
-          if (addr.amenity) parts.push(addr.amenity);
-          if (addr.building) parts.push(addr.building);
-          
-          // Bairro e subdivisões
-          if (addr.neighbourhood) parts.push(addr.neighbourhood);
-          if (addr.suburb) parts.push(addr.suburb);
-          if (addr.district) parts.push(addr.district);
-          
-          // Cidade e estado
-          if (addr.city || addr.town || addr.village) {
-            parts.push(addr.city || addr.town || addr.village);
-          }
-          if (addr.state) parts.push(addr.state);
-          
-          // CEP se disponível
-          if (addr.postcode) parts.push(`CEP: ${addr.postcode}`);
-          
-          // País
-          if (addr.country) parts.push(addr.country);
-          
-          // Se conseguiu montar um endereço detalhado
-          if (parts.length > 3) {
-            return parts.join(', ');
-          }
-          
-          // Fallback para display_name se não tiver detalhes suficientes
-          if (data.display_name) {
-            return data.display_name;
-          }
-        }
-      }
-    } catch (error) {
-      console.error('Erro Nominatim:', error);
-    }
-  
     // 2. Tentar com BigDataCloud (mais detalhado para Brasil)
     try {
       const bigDataUrl = `https://api.bigdatacloud.net/data/reverse-geocode-client?latitude=${latitude}&longitude=${longitude}&localityLanguage=pt`;
