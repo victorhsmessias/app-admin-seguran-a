@@ -545,31 +545,110 @@ const AdminDashboard = ({ user, onLogout }) => {
 
   // Função para obter endereço a partir de coordenadas
   const getAddressFromCoordinates = async (latitude, longitude) => {
+    // 1. Tentar com Nominatim primeiro (gratuito e confiável)
     try {
-      const bigDataResponse = await fetch(
-        `https://api.bigdatacloud.net/data/reverse-geocode-client?latitude=${latitude}&longitude=${longitude}&localityLanguage=pt`
-      );
+      const nominatimUrl = `https://nominatim.openstreetmap.org/reverse?format=json&lat=${latitude}&lon=${longitude}&zoom=18&addressdetails=1&accept-language=pt-BR`;
       
-      if (bigDataResponse.ok) {
-        const data = await bigDataResponse.json();        
+      const response = await fetch(nominatimUrl, {
+        headers: {
+          'User-Agent': 'DS-Security-System/1.0'
+        }
+      });
+      
+      if (response.ok) {
+        const data = await response.json();
+        
+        if (data && data.address) {
+          const addr = data.address;
+          const parts = [];
+          
+          // Extrair componentes do endereço em ordem de especificidade
+          if (addr.road || addr.street) parts.push(addr.road || addr.street);
+          if (addr.house_number) parts.push(`nº ${addr.house_number}`);
+          
+          // Adicionar detalhes do local se disponíveis
+          if (addr.amenity) parts.push(addr.amenity);
+          if (addr.building) parts.push(addr.building);
+          
+          // Bairro e subdivisões
+          if (addr.neighbourhood) parts.push(addr.neighbourhood);
+          if (addr.suburb) parts.push(addr.suburb);
+          if (addr.district) parts.push(addr.district);
+          
+          // Cidade e estado
+          if (addr.city || addr.town || addr.village) {
+            parts.push(addr.city || addr.town || addr.village);
+          }
+          if (addr.state) parts.push(addr.state);
+          
+          // CEP se disponível
+          if (addr.postcode) parts.push(`CEP: ${addr.postcode}`);
+          
+          // País
+          if (addr.country) parts.push(addr.country);
+          
+          // Se conseguiu montar um endereço detalhado
+          if (parts.length > 3) {
+            return parts.join(', ');
+          }
+          
+          // Fallback para display_name se não tiver detalhes suficientes
+          if (data.display_name) {
+            return data.display_name;
+          }
+        }
+      }
+    } catch (error) {
+      console.error('Erro Nominatim:', error);
+    }
+  
+    // 2. Tentar com BigDataCloud (mais detalhado para Brasil)
+    try {
+      const bigDataUrl = `https://api.bigdatacloud.net/data/reverse-geocode-client?latitude=${latitude}&longitude=${longitude}&localityLanguage=pt`;
+      
+      const response = await fetch(bigDataUrl);
+      
+      if (response.ok) {
+        const data = await response.json();
+        
         if (data) {
-          // Construir endereço mais completo
-          const addressParts = [];
+          const parts = [];
           
-          // Adicionar informações específicas primeiro
-          if (data.street) addressParts.push(data.street);
-          if (data.streetNumber) addressParts.push(`nº ${data.streetNumber}`);
-          if (data.neighbourhood) addressParts.push(data.neighbourhood);
-          if (data.district) addressParts.push(data.district);
-          if (data.locality) addressParts.push(data.locality);
-          if (data.city) addressParts.push(data.city);
-          if (data.principalSubdivision) addressParts.push(data.principalSubdivision);
-          if (data.countryName) addressParts.push(data.countryName);
+          // Montar endereço detalhado
+          if (data.street) parts.push(data.street);
+          if (data.streetNumber) parts.push(`nº ${data.streetNumber}`);
           
-          // Se encontrou pelo menos alguma informação
-          if (addressParts.length > 0) {
-            const completeAddress = addressParts.join(', ');
-            return completeAddress;
+          // Informações de localidade
+          if (data.neighbourhood) parts.push(data.neighbourhood);
+          if (data.district) parts.push(data.district);
+          if (data.locality) parts.push(data.locality);
+          if (data.city) parts.push(data.city);
+          if (data.principalSubdivision) parts.push(data.principalSubdivision);
+          
+          // CEP/Código postal
+          if (data.postcode) parts.push(`CEP: ${data.postcode}`);
+          
+          if (data.countryName) parts.push(data.countryName);
+          
+          // Adicionar informações extras se disponíveis
+          if (data.localityInfo && data.localityInfo.administrative) {
+            const admin = data.localityInfo.administrative;
+            // Procurar por informações administrativas adicionais
+            admin.forEach(item => {
+              if (item.name && !parts.includes(item.name)) {
+                if (item.description && item.description.includes('bairro')) {
+                  // Inserir bairro após o número
+                  const streetIndex = parts.findIndex(p => p.includes('nº'));
+                  if (streetIndex >= 0) {
+                    parts.splice(streetIndex + 1, 0, item.name);
+                  }
+                }
+              }
+            });
+          }
+          
+          if (parts.length > 0) {
+            return parts.join(', ');
           }
         }
       }
@@ -577,105 +656,134 @@ const AdminDashboard = ({ user, onLogout }) => {
       console.error('Erro BigDataCloud:', error);
     }
   
-    try {      
-      const positionstackResponse = await fetch(
-        `http://api.positionstack.com/v1/reverse?access_key=free&query=${latitude},${longitude}&limit=1&output=json`
-      );
-      
-      if (positionstackResponse.ok) {
-        const data = await positionstackResponse.json();        
-        if (data && data.data && data.data[0]) {
-          const location = data.data[0];
-          const parts = [];
-          
-          if (location.street) parts.push(location.street);
-          if (location.number) parts.push(`nº ${location.number}`);
-          if (location.neighbourhood) parts.push(location.neighbourhood);
-          if (location.locality) parts.push(location.locality);
-          if (location.region) parts.push(location.region);
-          if (location.country) parts.push(location.country);
-          
-          if (parts.length > 0) {
-            const address = parts.join(', ');
-            return address;
-          }
-        }
-      }
-    } catch (error) {
-      console.error('Erro Positionstack:', error);
-    }
-  
-    try {      
-      const proxyUrl = 'https://api.allorigins.win/get?url=';
-      const openCageUrl = `https://api.opencagedata.com/geocode/v1/json?q=${latitude}+${longitude}&key=demo-key&language=pt&pretty=1&no_annotations=1`;
-      const fullUrl = proxyUrl + encodeURIComponent(openCageUrl);
-      
-      const proxyResponse = await fetch(fullUrl);
-      
-      if (proxyResponse.ok) {
-        const proxyData = await proxyResponse.json();
-        const data = JSON.parse(proxyData.contents);
+    // 3. Tentar com API do Google Maps (se você tiver uma chave)
+    // NOTA: Requer chave de API válida
+    const GOOGLE_MAPS_API_KEY = process.env.REACT_APP_GOOGLE_MAPS_API_KEY;
+    if (GOOGLE_MAPS_API_KEY) {
+      try {
+        const googleUrl = `https://maps.googleapis.com/maps/api/geocode/json?latlng=${latitude},${longitude}&language=pt-BR&key=${GOOGLE_MAPS_API_KEY}`;
         
-        if (data && data.results && data.results[0]) {
-          const result = data.results[0];
+        const response = await fetch(googleUrl);
+        
+        if (response.ok) {
+          const data = await response.json();
           
-          if (result.formatted) {
-            return result.formatted;
-          }
-          
-          // Fallback: construir manualmente
-          const components = result.components;
-          if (components) {
+          if (data.results && data.results[0]) {
+            const result = data.results[0];
+            
+            // Google geralmente retorna o endereço mais completo no primeiro resultado
+            if (result.formatted_address) {
+              return result.formatted_address;
+            }
+            
+            // Alternativamente, montar a partir dos componentes
+            const components = result.address_components;
             const parts = [];
             
-            if (components.road) parts.push(components.road);
-            if (components.house_number) parts.push(`nº ${components.house_number}`);
-            if (components.neighbourhood) parts.push(components.neighbourhood);
-            if (components.suburb) parts.push(components.suburb);
-            if (components.city) parts.push(components.city);
-            if (components.state) parts.push(components.state);
-            if (components.country) parts.push(components.country);
+            const findComponent = (types) => {
+              const comp = components.find(c => 
+                types.some(type => c.types.includes(type))
+              );
+              return comp ? comp.long_name : null;
+            };
+            
+            const street = findComponent(['route']);
+            const number = findComponent(['street_number']);
+            const neighborhood = findComponent(['neighborhood', 'sublocality']);
+            const city = findComponent(['locality', 'administrative_area_level_2']);
+            const state = findComponent(['administrative_area_level_1']);
+            const postalCode = findComponent(['postal_code']);
+            const country = findComponent(['country']);
+            
+            if (street) parts.push(street);
+            if (number) parts.push(`nº ${number}`);
+            if (neighborhood) parts.push(neighborhood);
+            if (city) parts.push(city);
+            if (state) parts.push(state);
+            if (postalCode) parts.push(`CEP: ${postalCode}`);
+            if (country) parts.push(country);
             
             if (parts.length > 0) {
-              const address = parts.join(', ');
-              return address;
+              return parts.join(', ');
             }
           }
         }
+      } catch (error) {
+        console.error('Erro Google Maps:', error);
       }
-    } catch (error) {
-      console.error('Erro OpenCage:', error);
     }
   
+    // 4. Tentar com OpenStreetMap via Overpass API para mais detalhes
     try {
-      const proxyUrl = 'https://api.allorigins.win/get?url=';
-      const nominatimUrl = `https://nominatim.openstreetmap.org/reverse?format=json&lat=${latitude}&lon=${longitude}&zoom=18&addressdetails=1&accept-language=pt`;
-      const fullUrl = proxyUrl + encodeURIComponent(nominatimUrl);
+      const overpassUrl = `https://overpass-api.de/api/interpreter?data=[out:json];is_in(${latitude},${longitude});out;`;
       
-      const proxyResponse = await fetch(fullUrl, {
-        headers: {
-          'User-Agent': 'SecurityMonitoringSystem/1.0'
-        }
-      });
+      const response = await fetch(overpassUrl);
       
-      if (proxyResponse.ok) {
-        const proxyData = await proxyResponse.json();
-        const data = JSON.parse(proxyData.contents);        
-        if (data && data.display_name) {
-          return data.display_name;
+      if (response.ok) {
+        const data = await response.json();
+        
+        if (data.elements && data.elements.length > 0) {
+          const parts = [];
+          
+          // Processar elementos do Overpass
+          data.elements.forEach(element => {
+            if (element.tags) {
+              if (element.tags.name && element.tags.place) {
+                parts.push(element.tags.name);
+              }
+            }
+          });
+          
+          if (parts.length > 0) {
+            return parts.join(', ');
+          }
         }
       }
     } catch (error) {
-      console.error('Erro Nominatim:', error);
+      console.error('Erro Overpass:', error);
     }
   
-    console.warn('Todos os serviços falharam, usando coordenadas');
+    // 5. Fallback final: tentar com LocationIQ (similar ao Nominatim mas com limite maior)
+    try {
+      // LocationIQ oferece 5000 requisições gratuitas por dia
+      const locationIQUrl = `https://us1.locationiq.com/v1/reverse.php?key=pk.d36871f015c8d44e8b7073e4f5325036&lat=${latitude}&lon=${longitude}&format=json&accept-language=pt`;
+      
+      const response = await fetch(locationIQUrl);
+      
+      if (response.ok) {
+        const data = await response.json();
+        
+        if (data && data.address) {
+          const addr = data.address;
+          const parts = [];
+          
+          if (addr.road) parts.push(addr.road);
+          if (addr.house_number) parts.push(`nº ${addr.house_number}`);
+          if (addr.neighbourhood) parts.push(addr.neighbourhood);
+          if (addr.suburb) parts.push(addr.suburb);
+          if (addr.city || addr.town) parts.push(addr.city || addr.town);
+          if (addr.state) parts.push(addr.state);
+          if (addr.postcode) parts.push(`CEP: ${addr.postcode}`);
+          if (addr.country) parts.push(addr.country);
+          
+          if (parts.length > 0) {
+            return parts.join(', ');
+          }
+          
+          if (data.display_name) {
+            return data.display_name;
+          }
+        }
+      }
+    } catch (error) {
+      console.error('Erro LocationIQ:', error);
+    }
+  
+    // Se todos falharem, retornar coordenadas formatadas com mais informações
+    const latDir = latitude >= 0 ? 'N' : 'S';
+    const lngDir = longitude >= 0 ? 'L' : 'O';
     
-    // Determinar quadrante para informação adicional
-    const latDir = latitude >= 0 ? 'Norte' : 'Sul';
-    const lngDir = longitude >= 0 ? 'Leste' : 'Oeste';
-    
-    return `Localização: ${Math.abs(latitude).toFixed(4)}°${latDir}, ${Math.abs(longitude).toFixed(4)}°${lngDir}`;
+    return `Coordenadas: ${Math.abs(latitude).toFixed(6)}°${latDir}, ${Math.abs(longitude).toFixed(6)}°${lngDir} (Endereço detalhado não disponível)`;
   };
   // Função auxiliar para formatar data do filtro corretamente
   const formatFilterDate = (dateString) => {
