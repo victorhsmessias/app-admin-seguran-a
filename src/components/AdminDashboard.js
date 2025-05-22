@@ -545,52 +545,138 @@ const AdminDashboard = ({ user, onLogout }) => {
 
   // Função para obter endereço a partir de coordenadas
   const getAddressFromCoordinates = async (latitude, longitude) => {
-  try {
-    const response = await fetch(
-      `https://api.bigdatacloud.net/data/reverse-geocode-client?latitude=${latitude}&longitude=${longitude}&localityLanguage=pt`
-    );
-    
-    if (!response.ok) {
-      throw new Error(`HTTP error! Status: ${response.status}`);
-    }
-    
-    const data = await response.json();
-    
-    if (data && data.locality) {
-      const parts = [];
-      if (data.locality) parts.push(data.locality);
-      if (data.principalSubdivision) parts.push(data.principalSubdivision);
-      if (data.countryName) parts.push(data.countryName);
-      
-      return parts.join(', ') || `Coordenadas: ${latitude.toFixed(6)}, ${longitude.toFixed(6)}`;
-    } else {
-      return `Coordenadas: ${latitude.toFixed(6)}, ${longitude.toFixed(6)}`;
-    }
-  } catch (error) {
-    console.error('Erro ao obter endereço:', error);
-    
     try {
+      const bigDataResponse = await fetch(
+        `https://api.bigdatacloud.net/data/reverse-geocode-client?latitude=${latitude}&longitude=${longitude}&localityLanguage=pt`
+      );
+      
+      if (bigDataResponse.ok) {
+        const data = await bigDataResponse.json();        
+        if (data) {
+          // Construir endereço mais completo
+          const addressParts = [];
+          
+          // Adicionar informações específicas primeiro
+          if (data.street) addressParts.push(data.street);
+          if (data.streetNumber) addressParts.push(`nº ${data.streetNumber}`);
+          if (data.neighbourhood) addressParts.push(data.neighbourhood);
+          if (data.district) addressParts.push(data.district);
+          if (data.locality) addressParts.push(data.locality);
+          if (data.city) addressParts.push(data.city);
+          if (data.principalSubdivision) addressParts.push(data.principalSubdivision);
+          if (data.countryName) addressParts.push(data.countryName);
+          
+          // Se encontrou pelo menos alguma informação
+          if (addressParts.length > 0) {
+            const completeAddress = addressParts.join(', ');
+            return completeAddress;
+          }
+        }
+      }
+    } catch (error) {
+      console.error('Erro BigDataCloud:', error);
+    }
+  
+    try {      
+      const positionstackResponse = await fetch(
+        `http://api.positionstack.com/v1/reverse?access_key=free&query=${latitude},${longitude}&limit=1&output=json`
+      );
+      
+      if (positionstackResponse.ok) {
+        const data = await positionstackResponse.json();        
+        if (data && data.data && data.data[0]) {
+          const location = data.data[0];
+          const parts = [];
+          
+          if (location.street) parts.push(location.street);
+          if (location.number) parts.push(`nº ${location.number}`);
+          if (location.neighbourhood) parts.push(location.neighbourhood);
+          if (location.locality) parts.push(location.locality);
+          if (location.region) parts.push(location.region);
+          if (location.country) parts.push(location.country);
+          
+          if (parts.length > 0) {
+            const address = parts.join(', ');
+            return address;
+          }
+        }
+      }
+    } catch (error) {
+      console.error('Erro Positionstack:', error);
+    }
+  
+    try {      
       const proxyUrl = 'https://api.allorigins.win/get?url=';
-      const targetUrl = `https://nominatim.openstreetmap.org/reverse?format=json&lat=${latitude}&lon=${longitude}&zoom=18&addressdetails=1`;
-      const fullUrl = proxyUrl + encodeURIComponent(targetUrl);
+      const openCageUrl = `https://api.opencagedata.com/geocode/v1/json?q=${latitude}+${longitude}&key=demo-key&language=pt&pretty=1&no_annotations=1`;
+      const fullUrl = proxyUrl + encodeURIComponent(openCageUrl);
       
       const proxyResponse = await fetch(fullUrl);
       
       if (proxyResponse.ok) {
         const proxyData = await proxyResponse.json();
-        const nominatimData = JSON.parse(proxyData.contents);
+        const data = JSON.parse(proxyData.contents);
         
-        if (nominatimData && nominatimData.display_name) {
-          return nominatimData.display_name;
+        if (data && data.results && data.results[0]) {
+          const result = data.results[0];
+          
+          if (result.formatted) {
+            return result.formatted;
+          }
+          
+          // Fallback: construir manualmente
+          const components = result.components;
+          if (components) {
+            const parts = [];
+            
+            if (components.road) parts.push(components.road);
+            if (components.house_number) parts.push(`nº ${components.house_number}`);
+            if (components.neighbourhood) parts.push(components.neighbourhood);
+            if (components.suburb) parts.push(components.suburb);
+            if (components.city) parts.push(components.city);
+            if (components.state) parts.push(components.state);
+            if (components.country) parts.push(components.country);
+            
+            if (parts.length > 0) {
+              const address = parts.join(', ');
+              return address;
+            }
+          }
         }
       }
-    } catch (fallbackError) {
-      console.error('Erro no fallback:', fallbackError);
+    } catch (error) {
+      console.error('Erro OpenCage:', error);
     }
+  
+    try {
+      const proxyUrl = 'https://api.allorigins.win/get?url=';
+      const nominatimUrl = `https://nominatim.openstreetmap.org/reverse?format=json&lat=${latitude}&lon=${longitude}&zoom=18&addressdetails=1&accept-language=pt`;
+      const fullUrl = proxyUrl + encodeURIComponent(nominatimUrl);
+      
+      const proxyResponse = await fetch(fullUrl, {
+        headers: {
+          'User-Agent': 'SecurityMonitoringSystem/1.0'
+        }
+      });
+      
+      if (proxyResponse.ok) {
+        const proxyData = await proxyResponse.json();
+        const data = JSON.parse(proxyData.contents);        
+        if (data && data.display_name) {
+          return data.display_name;
+        }
+      }
+    } catch (error) {
+      console.error('Erro Nominatim:', error);
+    }
+  
+    console.warn('Todos os serviços falharam, usando coordenadas');
     
-    return `Coordenadas: ${latitude.toFixed(6)}, ${longitude.toFixed(6)}`;
-  }
-};
+    // Determinar quadrante para informação adicional
+    const latDir = latitude >= 0 ? 'Norte' : 'Sul';
+    const lngDir = longitude >= 0 ? 'Leste' : 'Oeste';
+    
+    return `Localização: ${Math.abs(latitude).toFixed(4)}°${latDir}, ${Math.abs(longitude).toFixed(4)}°${lngDir}`;
+  };
   // Função auxiliar para formatar data do filtro corretamente
   const formatFilterDate = (dateString) => {
     if (!dateString) return 'N/A';
