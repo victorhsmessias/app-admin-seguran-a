@@ -1208,7 +1208,7 @@ const AdminDashboard = ({ user, onLogout }) => {
         </div>
       );
     }
-
+  
     return (
       <div className="bg-white shadow rounded-lg overflow-hidden">
         <div className="px-4 py-5 border-b border-gray-200 sm:px-6 flex justify-between items-center">
@@ -1242,26 +1242,31 @@ const AdminDashboard = ({ user, onLogout }) => {
               </tr>
             </thead>
             <tbody className="bg-white divide-y divide-gray-200">
-               {securityGuards.length > 0 ? (
-                securityGuards.map((guard) => (
-                  <tr key={guard.id} className="hover:bg-gray-50">
-                    <td className="px-6 py-4 whitespace-nowrap">
-                      <div className="flex items-center">
-                        <div className="ml-4">
-                          <div className="text-sm font-medium text-gray-900">{guard.username}</div>
+              {securityGuards.length > 0 ? (
+                securityGuards.map((guard) => {
+                  // Definir as variáveis que estavam faltando
+                  const isBlocked = guard.status === 'blocked';
+                  const isOperational = isOperationalRole(guard.role);
+                  
+                  return (
+                    <tr key={guard.id} className="hover:bg-gray-50">
+                      <td className="px-6 py-4 whitespace-nowrap">
+                        <div className="flex items-center">
+                          <div className="ml-4">
+                            <div className="text-sm font-medium text-gray-900">{guard.username}</div>
+                          </div>
                         </div>
-                      </div>
-                    </td>
-                    <td className="px-6 py-4 whitespace-nowrap">
-                      <div className="text-sm text-gray-900">{guard.email}</div>
-                      <div className="text-sm text-gray-500">{guard.phone}</div>
-                    </td>
-                    <td className="px-6 py-4 whitespace-nowrap">
-                      <span className={`px-2 inline-flex text-xs leading-5 font-semibold rounded-full ${
-                        roleMappings[guard.role]?.bgColor || 'bg-gray-100'} ${roleMappings[guard.role]?.textColor || 'text-gray-800'
-                      }`}>
-                        {roleMappings[guard.role]?.text || guard.role}
-                      </span>
+                      </td>
+                      <td className="px-6 py-4 whitespace-nowrap">
+                        <div className="text-sm text-gray-900">{guard.email}</div>
+                        <div className="text-sm text-gray-500">{guard.phone}</div>
+                      </td>
+                      <td className="px-6 py-4 whitespace-nowrap">
+                        <span className={`px-2 inline-flex text-xs leading-5 font-semibold rounded-full ${
+                          roleMappings[guard.role]?.bgColor || 'bg-gray-100'} ${roleMappings[guard.role]?.textColor || 'text-gray-800'
+                        }`}>
+                          {roleMappings[guard.role]?.text || guard.role}
+                        </span>
                       </td>
                       <td className="px-6 py-4 whitespace-nowrap">
                         <span className={`px-2 inline-flex text-xs leading-5 font-semibold rounded-full ${
