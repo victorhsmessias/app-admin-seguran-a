@@ -545,33 +545,52 @@ const AdminDashboard = ({ user, onLogout }) => {
 
   // Função para obter endereço a partir de coordenadas
   const getAddressFromCoordinates = async (latitude, longitude) => {
-    try {
-      const response = await fetch(
-        `https://nominatim.openstreetmap.org/reverse?format=json&lat=${latitude}&lon=${longitude}&zoom=18&addressdetails=1`,
-        {
-          headers: {
-            'User-Agent': 'SecurityMonitoringSystem/1.0'
-          }
-        }
-      );
+  try {
+    const response = await fetch(
+      `https://api.bigdatacloud.net/data/reverse-geocode-client?latitude=${latitude}&longitude=${longitude}&localityLanguage=pt`
+    );
+    
+    if (!response.ok) {
+      throw new Error(`HTTP error! Status: ${response.status}`);
+    }
+    
+    const data = await response.json();
+    
+    if (data && data.locality) {
+      const parts = [];
+      if (data.locality) parts.push(data.locality);
+      if (data.principalSubdivision) parts.push(data.principalSubdivision);
+      if (data.countryName) parts.push(data.countryName);
       
-      if (!response.ok) {
-        throw new Error(`HTTP error! Status: ${response.status}`);
-      }
-      
-      const data = await response.json();
-      
-      if (data && data.display_name) {
-        return data.display_name;
-      } else {
-        return `Coordenadas: ${latitude.toFixed(6)}, ${longitude.toFixed(6)}`;
-      }
-    } catch (error) {
-      console.error('Erro ao obter endereço:', error);
+      return parts.join(', ') || `Coordenadas: ${latitude.toFixed(6)}, ${longitude.toFixed(6)}`;
+    } else {
       return `Coordenadas: ${latitude.toFixed(6)}, ${longitude.toFixed(6)}`;
     }
-  };
-
+  } catch (error) {
+    console.error('Erro ao obter endereço:', error);
+    
+    try {
+      const proxyUrl = 'https://api.allorigins.win/get?url=';
+      const targetUrl = `https://nominatim.openstreetmap.org/reverse?format=json&lat=${latitude}&lon=${longitude}&zoom=18&addressdetails=1`;
+      const fullUrl = proxyUrl + encodeURIComponent(targetUrl);
+      
+      const proxyResponse = await fetch(fullUrl);
+      
+      if (proxyResponse.ok) {
+        const proxyData = await proxyResponse.json();
+        const nominatimData = JSON.parse(proxyData.contents);
+        
+        if (nominatimData && nominatimData.display_name) {
+          return nominatimData.display_name;
+        }
+      }
+    } catch (fallbackError) {
+      console.error('Erro no fallback:', fallbackError);
+    }
+    
+    return `Coordenadas: ${latitude.toFixed(6)}, ${longitude.toFixed(6)}`;
+  }
+};
   // Função auxiliar para formatar data do filtro corretamente
   const formatFilterDate = (dateString) => {
     if (!dateString) return 'N/A';
