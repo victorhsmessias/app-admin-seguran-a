@@ -20,6 +20,7 @@ const AdminDashboard = ({ user, onLogout }) => {
   // Estados para controle da interface
   const [loading, setLoading] = useState(true);
   const navigate = useNavigate();
+  const addressCache = new Map();
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [isGeneratingReport, setIsGeneratingReport] = useState(false);
   const [selectedImage, setSelectedImage] = useState(null);
@@ -60,6 +61,19 @@ const AdminDashboard = ({ user, onLogout }) => {
   // Refs para cancelar listeners
   const guardsListenerRef = useRef(null);
   const checkInsListenerRef = useRef(null);
+
+  // Função para criar chave de cache
+  const getCacheKey = (lat, lng) => {
+    return `${Math.round(lat * 1000000) / 1000000},${Math.round(lng * 1000000) / 1000000}`;
+  };
+
+  // Função de delay para rate limiting
+  const delay = (ms) => new Promise(resolve => setTimeout(resolve, ms));
+
+  // Fila de requisições para controlar rate limiting
+  let requestQueue = Promise.resolve();
+  let lastRequestTime = 0;
+  const MIN_REQUEST_INTERVAL = 1000; 
 
   // Adicione após as definições de estado e useRef
   const checkAdminStatus = async () => {
@@ -545,63 +559,13 @@ const AdminDashboard = ({ user, onLogout }) => {
 
   // Função para obter endereço a partir de coordenadas
   const getAddressFromCoordinates = async (latitude, longitude) => {
-    // 1. Tentar com Nominatim primeiro (gratuito e confiável)
-    try {
-      const nominatimUrl = `https://nominatim.openstreetmap.org/reverse?format=json&lat=${latitude}&lon=${longitude}&zoom=18&addressdetails=1&accept-language=pt-BR`;
-      
-      const response = await fetch(nominatimUrl, {
-        headers: {
-          'User-Agent': 'DS-Security-System/1.0'
-        }
-      });
-      
-      if (response.ok) {
-        const data = await response.json();
-        
-        if (data && data.address) {
-          const addr = data.address;
-          const parts = [];
-          
-          // Extrair componentes do endereço em ordem de especificidade
-          if (addr.road || addr.street) parts.push(addr.road || addr.street);
-          if (addr.house_number) parts.push(`nº ${addr.house_number}`);
-          
-          // Adicionar detalhes do local se disponíveis
-          if (addr.amenity) parts.push(addr.amenity);
-          if (addr.building) parts.push(addr.building);
-          
-          // Bairro e subdivisões
-          if (addr.neighbourhood) parts.push(addr.neighbourhood);
-          if (addr.suburb) parts.push(addr.suburb);
-          if (addr.district) parts.push(addr.district);
-          
-          // Cidade e estado
-          if (addr.city || addr.town || addr.village) {
-            parts.push(addr.city || addr.town || addr.village);
-          }
-          if (addr.state) parts.push(addr.state);
-          
-          // CEP se disponível
-          if (addr.postcode) parts.push(`CEP: ${addr.postcode}`);
-          
-          // País
-          if (addr.country) parts.push(addr.country);
-          
-          // Se conseguiu montar um endereço detalhado
-          if (parts.length > 3) {
-            return parts.join(', ');
-          }
-          
-          // Fallback para display_name se não tiver detalhes suficientes
-          if (data.display_name) {
-            return data.display_name;
-          }
-        }
-      }
-    } catch (error) {
-      console.error('Erro Nominatim:', error);
+    // Verificar cache primeiro
+    const cacheKey = getCacheKey(latitude, longitude);
+    if (addressCache.has(cacheKey)) {
+      return addressCache.get(cacheKey);
     }
-    // 2. Tentar com BigDataCloud (mais detalhado para Brasil)
+
+    // 1. PRIMEIRA TENTATIVA: BigDataCloud (sem CORS, sem limite)
     try {
       const bigDataUrl = `https://api.bigdatacloud.net/data/reverse-geocode-client?latitude=${latitude}&longitude=${longitude}&localityLanguage=pt`;
       
@@ -617,135 +581,156 @@ const AdminDashboard = ({ user, onLogout }) => {
           if (data.street) parts.push(data.street);
           if (data.streetNumber) parts.push(`nº ${data.streetNumber}`);
           
-          // Informações de localidade
+          // Ponto de referência
+          if (data.nearbyPlaceName) parts.push(`(próx. ${data.nearbyPlaceName})`);
+          
+          // Bairro e localidade
           if (data.neighbourhood) parts.push(data.neighbourhood);
-          if (data.district) parts.push(data.district);
-          if (data.locality) parts.push(data.locality);
           if (data.city) parts.push(data.city);
-          if (data.principalSubdivision) parts.push(data.principalSubdivision);
-          
-          // CEP/Código postal
-          if (data.postcode) parts.push(`CEP: ${data.postcode}`);
-          
-          if (data.countryName) parts.push(data.countryName);
-          
-          // Adicionar informações extras se disponíveis
-          if (data.localityInfo && data.localityInfo.administrative) {
-            const admin = data.localityInfo.administrative;
-            // Procurar por informações administrativas adicionais
-            admin.forEach(item => {
-              if (item.name && !parts.includes(item.name)) {
-                if (item.description && item.description.includes('bairro')) {
-                  // Inserir bairro após o número
-                  const streetIndex = parts.findIndex(p => p.includes('nº'));
-                  if (streetIndex >= 0) {
-                    parts.splice(streetIndex + 1, 0, item.name);
-                  }
-                }
-              }
-            });
+          if (data.principalSubdivision) {
+            // Abreviar estados brasileiros
+            const state = data.principalSubdivision;
+            const stateAbbr = {
+              'Paraná': 'PR',
+              'São Paulo': 'SP',
+              'Rio de Janeiro': 'RJ',
+              'Minas Gerais': 'MG',
+              'Rio Grande do Sul': 'RS',
+              'Santa Catarina': 'SC',
+              'Bahia': 'BA',
+              'Pernambuco': 'PE',
+              'Ceará': 'CE',
+              'Distrito Federal': 'DF',
+              'Goiás': 'GO',
+              'Mato Grosso': 'MT',
+              'Mato Grosso do Sul': 'MS',
+              'Amazonas': 'AM',
+              'Pará': 'PA',
+              'Maranhão': 'MA',
+              'Espírito Santo': 'ES',
+              'Paraíba': 'PB',
+              'Rio Grande do Norte': 'RN',
+              'Alagoas': 'AL',
+              'Piauí': 'PI',
+              'Sergipe': 'SE',
+              'Rondônia': 'RO',
+              'Roraima': 'RR',
+              'Acre': 'AC',
+              'Amapá': 'AP',
+              'Tocantins': 'TO'
+            };
+            parts.push(stateAbbr[state] || state);
           }
           
-          if (parts.length > 0) {
-            return parts.join(', ');
+          // CEP
+          if (data.postcode) {
+            const cep = data.postcode.replace(/\D/g, '');
+            if (cep.length === 8) {
+              parts.push(`CEP: ${cep.slice(0, 5)}-${cep.slice(5)}`);
+            } else if (data.postcode) {
+              parts.push(`CEP: ${data.postcode}`);
+            }
+          }
+          
+          // País (omitir se for Brasil)
+          if (data.countryName && data.countryName !== 'Brasil' && data.countryName !== 'Brazil') {
+            parts.push(data.countryName);
+          }
+          
+          if (parts.length > 2) {
+            const address = parts.filter(p => p).join(', ');
+            addressCache.set(cacheKey, address);
+            return address;
           }
         }
       }
     } catch (error) {
-      console.error('Erro BigDataCloud:', error);
+      console.error('❌ Erro BigDataCloud:', error);
     }
-  
-    // 3. Tentar com API do Google Maps (se você tiver uma chave)
-    // NOTA: Requer chave de API válida
-    const GOOGLE_MAPS_API_KEY = process.env.REACT_APP_GOOGLE_MAPS_API_KEY;
-    if (GOOGLE_MAPS_API_KEY) {
-      try {
-        const googleUrl = `https://maps.googleapis.com/maps/api/geocode/json?latlng=${latitude},${longitude}&language=pt-BR&key=${GOOGLE_MAPS_API_KEY}`;
-        
-        const response = await fetch(googleUrl);
-        
-        if (response.ok) {
-          const data = await response.json();
-          
-          if (data.results && data.results[0]) {
-            const result = data.results[0];
-            
-            // Google geralmente retorna o endereço mais completo no primeiro resultado
-            if (result.formatted_address) {
-              return result.formatted_address;
-            }
-            
-            // Alternativamente, montar a partir dos componentes
-            const components = result.address_components;
-            const parts = [];
-            
-            const findComponent = (types) => {
-              const comp = components.find(c => 
-                types.some(type => c.types.includes(type))
-              );
-              return comp ? comp.long_name : null;
-            };
-            
-            const street = findComponent(['route']);
-            const number = findComponent(['street_number']);
-            const neighborhood = findComponent(['neighborhood', 'sublocality']);
-            const city = findComponent(['locality', 'administrative_area_level_2']);
-            const state = findComponent(['administrative_area_level_1']);
-            const postalCode = findComponent(['postal_code']);
-            const country = findComponent(['country']);
-            
-            if (street) parts.push(street);
-            if (number) parts.push(`nº ${number}`);
-            if (neighborhood) parts.push(neighborhood);
-            if (city) parts.push(city);
-            if (state) parts.push(state);
-            if (postalCode) parts.push(`CEP: ${postalCode}`);
-            if (country) parts.push(country);
-            
-            if (parts.length > 0) {
-              return parts.join(', ');
-            }
-          }
-        }
-      } catch (error) {
-        console.error('Erro Google Maps:', error);
-      }
-    }
-  
-    // 4. Tentar com OpenStreetMap via Overpass API para mais detalhes
+
+    // 2. SEGUNDA TENTATIVA: Nominatim via Proxy CORS (com rate limiting)
     try {
-      const overpassUrl = `https://overpass-api.de/api/interpreter?data=[out:json];is_in(${latitude},${longitude});out;`;
+      // Implementar fila para rate limiting
+      requestQueue = requestQueue.then(async () => {
+        const now = Date.now();
+        const timeSinceLastRequest = now - lastRequestTime;
+        
+        if (timeSinceLastRequest < MIN_REQUEST_INTERVAL) {
+          const waitTime = MIN_REQUEST_INTERVAL - timeSinceLastRequest;
+          await delay(waitTime);
+        }
+        
+        lastRequestTime = Date.now();
+      });
       
-      const response = await fetch(overpassUrl);
+      await requestQueue;
+            
+      // Usar proxy CORS gratuito
+      const proxyUrl = 'https://corsproxy.io/?';
+      const nominatimUrl = `https://nominatim.openstreetmap.org/reverse?format=json&lat=${latitude}&lon=${longitude}&zoom=18&addressdetails=1&accept-language=pt-BR`;
+      
+      const response = await fetch(proxyUrl + encodeURIComponent(nominatimUrl), {
+        headers: {
+          'Accept': 'application/json',
+        }
+      });
       
       if (response.ok) {
         const data = await response.json();
         
-        if (data.elements && data.elements.length > 0) {
+        if (data && data.address) {
+          const addr = data.address;
           const parts = [];
           
-          // Processar elementos do Overpass
-          data.elements.forEach(element => {
-            if (element.tags) {
-              if (element.tags.name && element.tags.place) {
-                parts.push(element.tags.name);
-              }
-            }
-          });
+          // Extrair componentes do endereço
+          if (addr.road || addr.street) parts.push(addr.road || addr.street);
+          if (addr.house_number) parts.push(`nº ${addr.house_number}`);
           
-          if (parts.length > 0) {
-            return parts.join(', ');
+          // Estabelecimento/Local
+          if (addr.amenity) parts.push(addr.amenity);
+          if (addr.shop) parts.push(addr.shop);
+          if (addr.building) parts.push(addr.building);
+          
+          // Bairro
+          if (addr.neighbourhood) parts.push(addr.neighbourhood);
+          else if (addr.suburb) parts.push(addr.suburb);
+          else if (addr.district) parts.push(addr.district);
+          
+          // Cidade
+          if (addr.city) parts.push(addr.city);
+          else if (addr.town) parts.push(addr.town);
+          else if (addr.village) parts.push(addr.village);
+          
+          // Estado
+          if (addr.state) parts.push(addr.state);
+          
+          // CEP
+          if (addr.postcode) parts.push(`CEP: ${addr.postcode}`);
+          
+          // País (omitir se for Brasil)
+          if (addr.country && addr.country !== 'Brasil') parts.push(addr.country);
+          
+          if (parts.length > 3) {
+            const address = parts.join(', ');
+            addressCache.set(cacheKey, address);
+            return address;
+          }
+          
+          // Se não tiver detalhes suficientes, usar display_name
+          if (data.display_name) {
+            addressCache.set(cacheKey, data.display_name);
+            return data.display_name;
           }
         }
       }
     } catch (error) {
-      console.error('Erro Overpass:', error);
+      console.error('❌ Erro Nominatim:', error);
     }
-  
-    // 5. Fallback final: tentar com LocationIQ (similar ao Nominatim mas com limite maior)
+
+    // 3. TERCEIRA TENTATIVA: LocationIQ (limite de 5000/dia grátis)
     try {
-      // LocationIQ oferece 5000 requisições gratuitas por dia
-      const locationIQUrl = `https://us1.locationiq.com/v1/reverse.php?key=pk.d36871f015c8d44e8b7073e4f5325036&lat=${latitude}&lon=${longitude}&format=json&accept-language=pt`;
+      const locationIQKey = 'pk.d36871f015c8d44e8b7073e4f5325036'; // Chave demo pública
+      const locationIQUrl = `https://us1.locationiq.com/v1/reverse.php?key=${locationIQKey}&lat=${latitude}&lon=${longitude}&format=json&accept-language=pt`;
       
       const response = await fetch(locationIQUrl);
       
@@ -758,31 +743,82 @@ const AdminDashboard = ({ user, onLogout }) => {
           
           if (addr.road) parts.push(addr.road);
           if (addr.house_number) parts.push(`nº ${addr.house_number}`);
-          if (addr.neighbourhood) parts.push(addr.neighbourhood);
-          if (addr.suburb) parts.push(addr.suburb);
+          if (addr.neighbourhood || addr.suburb) parts.push(addr.neighbourhood || addr.suburb);
           if (addr.city || addr.town) parts.push(addr.city || addr.town);
           if (addr.state) parts.push(addr.state);
           if (addr.postcode) parts.push(`CEP: ${addr.postcode}`);
-          if (addr.country) parts.push(addr.country);
           
           if (parts.length > 0) {
-            return parts.join(', ');
+            const address = parts.join(', ');
+            addressCache.set(cacheKey, address);
+            return address;
           }
           
           if (data.display_name) {
+            addressCache.set(cacheKey, data.display_name);
             return data.display_name;
           }
         }
       }
     } catch (error) {
-      console.error('Erro LocationIQ:', error);
+      console.error('❌ Erro LocationIQ:', error);
     }
-  
-    // Se todos falharem, retornar coordenadas formatadas com mais informações
-    const latDir = latitude >= 0 ? 'N' : 'S';
-    const lngDir = longitude >= 0 ? 'L' : 'O';
+
+    // 4. QUARTA TENTATIVA: OpenCage via proxy (limite de 2500/dia grátis)
+    try {
+      const proxyUrl = 'https://api.allorigins.win/get?url=';
+      const openCageUrl = `https://api.opencagedata.com/geocode/v1/json?q=${latitude}+${longitude}&key=demo&language=pt&pretty=1`;
+      
+      const response = await fetch(proxyUrl + encodeURIComponent(openCageUrl));
+      
+      if (response.ok) {
+        const proxyData = await response.json();
+        const data = JSON.parse(proxyData.contents);
+        
+        if (data && data.results && data.results[0]) {
+          const result = data.results[0];
+          
+          if (result.formatted) {
+            addressCache.set(cacheKey, result.formatted);
+            return result.formatted;
+          }
+          
+          // Montar endereço dos componentes
+          const comp = result.components;
+          if (comp) {
+            const parts = [];
+            
+            if (comp.road) parts.push(comp.road);
+            if (comp.house_number) parts.push(`nº ${comp.house_number}`);
+            if (comp.neighbourhood || comp.suburb) parts.push(comp.neighbourhood || comp.suburb);
+            if (comp.city || comp.town) parts.push(comp.city || comp.town);
+            if (comp.state) parts.push(comp.state);
+            if (comp.postcode) parts.push(`CEP: ${comp.postcode}`);
+            
+            if (parts.length > 0) {
+              const address = parts.join(', ');
+              addressCache.set(cacheKey, address);
+              return address;
+            }
+          }
+        }
+      }
+    } catch (error) {
+      console.error('❌ Erro OpenCage:', error);
+    }
+
+    // FALLBACK FINAL: Coordenadas formatadas
+    console.warn('⚠️ Todos os serviços falharam, usando coordenadas');
+    const fallback = `Lat: ${latitude.toFixed(6)}, Lng: ${longitude.toFixed(6)} (Endereço não disponível)`;
     
-    return `Coordenadas: ${Math.abs(latitude).toFixed(6)}°${latDir}, ${Math.abs(longitude).toFixed(6)}°${lngDir} (Endereço detalhado não disponível)`;
+    // Cachear mesmo o fallback para evitar novas tentativas
+    addressCache.set(cacheKey, fallback);
+    return fallback;
+  };
+
+  // Função auxiliar para limpar o cache (se necessário)
+  window.clearAddressCache = () => {
+    addressCache.clear();
   };
   // Função auxiliar para formatar data do filtro corretamente
   const formatFilterDate = (dateString) => {
